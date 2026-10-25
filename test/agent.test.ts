@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Agent, type AgentEvent } from '../src/agent.ts';
 import type { ChatMessage, ChatResult, LLM } from '../src/llm.ts';
 import { allTools, readOnlyTools, resolveInside, type FileChange, type ToolContext } from '../src/tools.ts';
-import { OpenAICompatibleLLM, pickModel } from '../src/llm.ts';
+import { OpenAICompatibleLLM, pickModel, rankModels, stripThoughts } from '../src/llm.ts';
 import http from 'node:http';
 
 /** A fake model that replays scripted replies, optionally waiting until aborted. */
@@ -247,5 +247,27 @@ test('a barge-in cancels the retry wait', async () => {
   const started = Date.now();
   await assert.rejects(llm.chat([], [], controller.signal));
   assert.ok(Date.now() - started < 2000);
+  p.close();
+});
+
+test('backups prefer the same model family', () => {
+  const ids = ['models/gemma-4-26b-a4b-it', 'models/gemini-3.8-flash', 'models/gemini-3.8-flash-lite', 'models/gemini-3.5-flash'];
+  assert.deepEqual(rankModels(ids, 'gemini').slice(0, 3), ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.8-flash-lite']);
+});
+
+test('private reasoning is stripped from replies', () => {
+  assert.equal(stripThoughts('<thought>The user wants files.\nLet me check.</thought>I will list the files.'), 'I will list the files.');
+  assert.equal(stripThoughts('<think>still thinking with no end'), '');
+  assert.equal(stripThoughts('Plain answer.'), 'Plain answer.');
+});
+
+test('goes back to the main model once the backup window ends', async () => {
+  const p = await fakeProvider([503, 503, 200, 200], ['gemini-3.8-flash', 'gemini-3.8-flash-lite']);
+  const llm = new OpenAICompatibleLLM(p.url, 'gemini-3.8-flash', 'k', false, [], [1], 0);
+  await llm.chat([], [], new AbortController().signal);
+  assert.equal(llm.label, 'gemini-3.8-flash-lite');
+  await new Promise((r) => setTimeout(r, 5));
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from gemini-3.8-flash');
   p.close();
 });

@@ -39,11 +39,26 @@ const PRESETS: Record<string, { baseUrl: string; model: string }> = {
 const SKIP_MODELS = /(embed|image|tts|audio|live|vision|guard|preview|exp|nano)/i;
 
 /** Rank chat models newest first, preferring full "flash" models over "lite" ones. */
-export function rankModels(ids: string[]): string[] {
+export function rankModels(ids: string[], family?: string): string[] {
   const usable = ids.map((id) => id.replace(/^models\//, '')).filter((id) => !SKIP_MODELS.test(id));
+  const sameFamily = (id: string) => (family && modelFamily(id) === family ? 10_000 : 0);
   const version = (id: string) => Number(id.match(/(\d+(?:\.\d+)?)/)?.[1] ?? 0);
-  const score = (id: string) => (/lite/i.test(id) ? 0 : 1000) + version(id) * 10 + (/flash/i.test(id) ? 1 : 0);
+  const score = (id: string) => sameFamily(id) + (/lite/i.test(id) ? 0 : 1000) + version(id) * 10 + (/flash/i.test(id) ? 1 : 0);
   return usable.sort((a, b) => score(b) - score(a));
+}
+
+/** "gemini-3.8-flash" → "gemini". Backups from the same family behave most alike. */
+export function modelFamily(id: string): string {
+  return id.replace(/^models\//, '').split(/[-_:]/)[0].toLowerCase();
+}
+
+/** Some models put their private reasoning in the reply; it must not be shown or read aloud. */
+export function stripThoughts(text: string | null): string | null {
+  if (text === null) return null;
+  return text
+    .replace(/<(thought|think|thinking)>[\s\S]*?<\/\1>/gi, '')
+    .replace(/^\s*<(thought|think|thinking)>[\s\S]*$/i, '')
+    .trim();
 }
 
 /** The best general model, never a "lite" one. */
@@ -66,16 +81,23 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export class OpenAICompatibleLLM implements LLM {
+  private model: string;
+  /** While the main model is overloaded, use a backup until this time, then try the main one again. */
+  private backupUntil = 0;
+
   constructor(
     private baseUrl: string,
-    private model: string,
+    private primary: string,
     private apiKey: string | undefined,
     /** When the model was not chosen by the user, swap to the newest available one if it is retired. */
     private autoModel = false,
     /** Models to switch to when the current one stays busy. Discovered from the provider when empty. */
     private fallbacks: string[] = [],
     private retryDelaysMs = [1000, 2000, 4000],
-  ) {}
+    private backupMs = 10 * 60_000,
+  ) {
+    this.model = primary;
+  }
 
   get label(): string {
     return this.model;
@@ -114,6 +136,7 @@ export class OpenAICompatibleLLM implements LLM {
 
   /** Free tiers are often overloaded: retry with backoff, then move to a backup model. */
   private async send(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
+    if (this.model !== this.primary && Date.now() > this.backupUntil) this.model = this.primary;
     let res = await this.post(this.model, messages, tools, signal);
     for (const delay of this.retryDelaysMs) {
       if (!BUSY.has(res.status)) return res;
@@ -122,12 +145,13 @@ export class OpenAICompatibleLLM implements LLM {
     }
     if (!BUSY.has(res.status)) return res;
 
-    if (!this.fallbacks.length) this.fallbacks = rankModels(await this.listModels()).slice(0, 4);
+    if (!this.fallbacks.length) this.fallbacks = rankModels(await this.listModels(), modelFamily(this.primary)).slice(0, 4);
     for (const backup of this.fallbacks.filter((m) => m !== this.model)) {
       const attempt = await this.post(backup, messages, tools, signal);
       if (attempt.ok) {
-        console.log(`  Model ${this.model} is busy, switching to ${backup}`);
+        console.log(`  Model ${this.model} is busy, using ${backup} for the next few minutes`);
         this.model = backup;
+        this.backupUntil = Date.now() + this.backupMs;
         return attempt;
       }
     }
@@ -141,7 +165,7 @@ export class OpenAICompatibleLLM implements LLM {
       const next = await this.newestModel();
       if (next && next !== this.model) {
         console.log(`  Model ${this.model} is unavailable, switching to ${next}`);
-        this.model = next;
+        this.model = this.primary = next;
         return this.chat(messages, tools, signal);
       }
     }
@@ -160,7 +184,7 @@ export class OpenAICompatibleLLM implements LLM {
       type: 'function' as const,
       id: c.id || `call_${Date.now()}_${i}`,
     }));
-    return { content: msg.content ?? null, tool_calls: tool_calls?.length ? tool_calls : undefined };
+    return { content: stripThoughts(msg.content ?? null) || null, tool_calls: tool_calls?.length ? tool_calls : undefined };
   }
 }
 
