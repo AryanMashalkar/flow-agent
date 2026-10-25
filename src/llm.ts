@@ -36,14 +36,33 @@ const PRESETS: Record<string, { baseUrl: string; model: string }> = {
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
 };
 
-/** Rank model ids so the newest general-purpose "flash" style model comes first. */
-export function pickModel(ids: string[]): string | undefined {
-  const usable = ids
-    .map((id) => id.replace(/^models\//, ''))
-    .filter((id) => !/(embed|image|tts|audio|live|vision|guard|preview|exp|lite|nano)/i.test(id));
+const SKIP_MODELS = /(embed|image|tts|audio|live|vision|guard|preview|exp|nano)/i;
+
+/** Rank chat models newest first, preferring full "flash" models over "lite" ones. */
+export function rankModels(ids: string[]): string[] {
+  const usable = ids.map((id) => id.replace(/^models\//, '')).filter((id) => !SKIP_MODELS.test(id));
   const version = (id: string) => Number(id.match(/(\d+(?:\.\d+)?)/)?.[1] ?? 0);
-  const score = (id: string) => version(id) * 10 + (/flash/i.test(id) ? 1 : 0);
-  return usable.sort((a, b) => score(b) - score(a))[0];
+  const score = (id: string) => (/lite/i.test(id) ? 0 : 1000) + version(id) * 10 + (/flash/i.test(id) ? 1 : 0);
+  return usable.sort((a, b) => score(b) - score(a));
+}
+
+/** The best general model, never a "lite" one. */
+export function pickModel(ids: string[]): string | undefined {
+  return rankModels(ids).find((id) => !/lite/i.test(id));
+}
+
+/** Statuses that mean "busy, try again", not "your request is wrong". */
+const BUSY = new Set([429, 500, 502, 503, 504]);
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error('aborted'));
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(new Error('aborted'));
+    }, { once: true });
+  });
 }
 
 export class OpenAICompatibleLLM implements LLM {
@@ -53,6 +72,9 @@ export class OpenAICompatibleLLM implements LLM {
     private apiKey: string | undefined,
     /** When the model was not chosen by the user, swap to the newest available one if it is retired. */
     private autoModel = false,
+    /** Models to switch to when the current one stays busy. Discovered from the provider when empty. */
+    private fallbacks: string[] = [],
+    private retryDelaysMs = [1000, 2000, 4000],
   ) {}
 
   get label(): string {
@@ -66,20 +88,54 @@ export class OpenAICompatibleLLM implements LLM {
     };
   }
 
-  private async newestModel(): Promise<string | undefined> {
-    const res = await fetch(`${this.baseUrl.replace(/\/$/, '')}/models`, { headers: this.headers });
-    if (!res.ok) return undefined;
-    const data = (await res.json()) as { data?: { id: string }[] };
-    return pickModel((data.data ?? []).map((m) => m.id));
+  private async listModels(): Promise<string[]> {
+    try {
+      const res = await fetch(`${this.baseUrl.replace(/\/$/, '')}/models`, { headers: this.headers });
+      if (!res.ok) return [];
+      const data = (await res.json()) as { data?: { id: string }[] };
+      return (data.data ?? []).map((m) => m.id);
+    } catch {
+      return [];
+    }
   }
 
-  async chat(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<ChatResult> {
-    const res = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+  private async newestModel(): Promise<string | undefined> {
+    return pickModel(await this.listModels());
+  }
+
+  private post(model: string, messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
+    return fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       signal,
       headers: this.headers,
-      body: JSON.stringify({ model: this.model, messages, tools, tool_choice: 'auto' }),
+      body: JSON.stringify({ model, messages, tools, tool_choice: 'auto' }),
     });
+  }
+
+  /** Free tiers are often overloaded: retry with backoff, then move to a backup model. */
+  private async send(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
+    let res = await this.post(this.model, messages, tools, signal);
+    for (const delay of this.retryDelaysMs) {
+      if (!BUSY.has(res.status)) return res;
+      await sleep(delay, signal);
+      res = await this.post(this.model, messages, tools, signal);
+    }
+    if (!BUSY.has(res.status)) return res;
+
+    if (!this.fallbacks.length) this.fallbacks = rankModels(await this.listModels()).slice(0, 4);
+    for (const backup of this.fallbacks.filter((m) => m !== this.model)) {
+      const attempt = await this.post(backup, messages, tools, signal);
+      if (attempt.ok) {
+        console.log(`  Model ${this.model} is busy, switching to ${backup}`);
+        this.model = backup;
+        return attempt;
+      }
+    }
+    return res;
+  }
+
+  async chat(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<ChatResult> {
+    const res = await this.send(messages, tools, signal);
     if (res.status === 404 && this.autoModel) {
       this.autoModel = false;
       const next = await this.newestModel();
@@ -88,6 +144,9 @@ export class OpenAICompatibleLLM implements LLM {
         this.model = next;
         return this.chat(messages, tools, signal);
       }
+    }
+    if (BUSY.has(res.status)) {
+      throw new Error(`The model is overloaded right now (${res.status}) and no backup model answered. Wait a minute and try again, or set LLM_PROVIDER=groq in .env.`);
     }
     if (!res.ok) {
       throw new Error(`Model API ${res.status}: ${(await res.text()).slice(0, 500)}`);
@@ -116,5 +175,6 @@ export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): LLM {
   if (!env.LLM_API_KEY && provider !== 'ollama') {
     throw new Error(`LLM_API_KEY is missing. Copy .env.example to .env and add a free ${provider} key.`);
   }
-  return new OpenAICompatibleLLM(baseUrl, model, env.LLM_API_KEY, !env.LLM_MODEL);
+  const fallbacks = (env.LLM_FALLBACK_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);
+  return new OpenAICompatibleLLM(baseUrl, model, env.LLM_API_KEY, !env.LLM_MODEL, fallbacks);
 }

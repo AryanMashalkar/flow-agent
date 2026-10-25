@@ -6,7 +6,8 @@ import path from 'node:path';
 import { Agent, type AgentEvent } from '../src/agent.ts';
 import type { ChatMessage, ChatResult, LLM } from '../src/llm.ts';
 import { allTools, readOnlyTools, resolveInside, type FileChange, type ToolContext } from '../src/tools.ts';
-import { pickModel } from '../src/llm.ts';
+import { OpenAICompatibleLLM, pickModel } from '../src/llm.ts';
+import http from 'node:http';
 
 /** A fake model that replays scripted replies, optionally waiting until aborted. */
 class ScriptedLLM implements LLM {
@@ -197,4 +198,54 @@ test('pickModel prefers the newest general flash model', () => {
     pickModel(['models/gemini-2.5-flash', 'models/gemini-3.8-flash', 'models/gemini-3.8-flash-lite', 'models/gemini-3.8-pro-preview', 'models/text-embedding-004']),
     'gemini-3.8-flash',
   );
+});
+
+/** A fake OpenAI-compatible server that answers with the given statuses in order. */
+async function fakeProvider(statuses: number[], models: string[] = []) {
+  const seen: string[] = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.endsWith('/models')) return res.end(JSON.stringify({ data: models.map((id) => ({ id })) }));
+      const model = JSON.parse(body).model;
+      seen.push(model);
+      const status = statuses.shift() ?? 200;
+      res.statusCode = status;
+      res.end(JSON.stringify(status === 200 ? { choices: [{ message: { content: `hi from ${model}` } }] } : { error: 'busy' }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const port = (server.address() as { port: number }).port;
+  return { url: `http://localhost:${port}`, seen, close: () => server.close() };
+}
+
+test('retries a busy model, then succeeds', async () => {
+  const p = await fakeProvider([503, 503, 200]);
+  const llm = new OpenAICompatibleLLM(p.url, 'main', 'k', false, [], [1, 1, 1]);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from main');
+  assert.deepEqual(p.seen, ['main', 'main', 'main']);
+  p.close();
+});
+
+test('switches to a backup model when the main one stays busy', async () => {
+  const p = await fakeProvider([503, 503, 503, 503, 200], ['models/gemini-3.8-flash', 'models/gemini-3.8-flash-lite', 'models/text-embedding-004']);
+  const llm = new OpenAICompatibleLLM(p.url, 'gemini-3.8-flash', 'k', false, [], [1, 1, 1]);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from gemini-3.8-flash-lite');
+  assert.equal(llm.label, 'gemini-3.8-flash-lite');
+  p.close();
+});
+
+test('a barge-in cancels the retry wait', async () => {
+  const p = await fakeProvider([503, 503, 503, 503]);
+  const llm = new OpenAICompatibleLLM(p.url, 'main', 'k', false, [], [10_000]);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 100);
+  const started = Date.now();
+  await assert.rejects(llm.chat([], [], controller.signal));
+  assert.ok(Date.now() - started < 2000);
+  p.close();
 });

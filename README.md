@@ -38,6 +38,8 @@ Every provider is reached through the same OpenAI-compatible API, so switching i
 | `ollama` | Free, runs locally | No key needed. Pull a model first, for example `ollama pull qwen2.5-coder:7b` |
 | anything else | – | Set `LLM_BASE_URL` and `LLM_MODEL` |
 
+Free tiers get busy. When the model answers "overloaded", Flow Agent retries with backoff and then switches to a backup model from the same provider (set your own with `LLM_FALLBACK_MODELS`).
+
 ## How the voice loop works
 
 - **Voice in:** Wispr Flow types your words into the command box. The app spots dictation (whole phrases arriving at once, not single key presses) and sends it automatically after a short pause, so you never touch the keyboard. Say just "stop" to halt the agent.
