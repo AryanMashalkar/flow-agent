@@ -48,6 +48,9 @@ details.ev pre { margin: 8px 0 0; font-family: ui-monospace, Consolas, monospace
 .badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-left: 6px; background: var(--line); color: var(--text); }
 .badge.pass { background: var(--ok); color: #04130b; }
 .badge.fail { background: var(--err); color: #1a0505; }
+.ev.thinking { color: var(--muted); font-size: 14px; padding: 4px 14px; }
+.ev.thinking::after { content: ""; animation: dots 1.2s steps(4, end) infinite; }
+@keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
 .ev.error { color: var(--err); border: 1px solid var(--err); }
 
 footer { border-top: 1px solid var(--line); padding: 14px 20px; background: var(--panel); }

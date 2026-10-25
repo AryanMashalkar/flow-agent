@@ -12,7 +12,8 @@ export type AgentEvent =
   | { type: 'stopped' }
   | { type: 'done'; text: string }
   | { type: 'error'; message: string }
-  | { type: 'status'; running: boolean };
+  | { type: 'status'; running: boolean }
+  | { type: 'notice'; text: string };
 
 const SYSTEM_PROMPT = `You are Flow Agent, a voice-native coding agent. The user talks to you by voice and hears your replies read aloud.
 
@@ -49,6 +50,7 @@ export class Agent extends EventEmitter {
     super();
     this.tools = new Map(opts.tools.map((t) => [t.spec.function.name, t]));
     this.maxSteps = opts.maxSteps ?? 25;
+    opts.llm.onNotice = (text) => this.send({ type: 'notice', text });
   }
 
   get busy(): boolean {

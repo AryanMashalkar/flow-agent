@@ -271,3 +271,25 @@ test('goes back to the main model once the backup window ends', async () => {
   assert.equal(out.content, 'hi from gemini-3.8-flash');
   p.close();
 });
+
+test('a request that hangs past the timeout is retried, with a notice', async () => {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (++calls === 1) return; // never answer the first request
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ choices: [{ message: { content: 'finally' } }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const url = `http://localhost:${(server.address() as { port: number }).port}`;
+  const llm = new OpenAICompatibleLLM(url, 'main', 'k', false, [], [1], 60_000, 150);
+  const notices: string[] = [];
+  llm.onNotice = (t) => notices.push(t);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'finally');
+  assert.match(notices[0], /main is slow \(504\)/);
+  server.closeAllConnections();
+  server.close();
+});

@@ -26,6 +26,8 @@ export interface ChatResult {
 
 export interface LLM {
   readonly label: string;
+  /** Called with short status updates (retrying, switching models) for the UI. */
+  onNotice?: (text: string) => void;
   chat(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<ChatResult>;
 }
 
@@ -82,6 +84,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 export class OpenAICompatibleLLM implements LLM {
   private model: string;
+  onNotice?: (text: string) => void;
   /** While the main model is overloaded, use a backup until this time, then try the main one again. */
   private backupUntil = 0;
 
@@ -95,6 +98,7 @@ export class OpenAICompatibleLLM implements LLM {
     private fallbacks: string[] = [],
     private retryDelaysMs = [1000, 2000, 4000],
     private backupMs = 10 * 60_000,
+    private timeoutMs = 45_000,
   ) {
     this.model = primary;
   }
@@ -125,21 +129,36 @@ export class OpenAICompatibleLLM implements LLM {
     return pickModel(await this.listModels());
   }
 
-  private post(model: string, messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
-    return fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST',
-      signal,
-      headers: this.headers,
-      body: JSON.stringify({ model, messages, tools, tool_choice: 'auto' }),
-    });
+  private notice(text: string): void {
+    console.log(`  ${text}`);
+    this.onNotice?.(text);
+  }
+
+  /** One request. A request that hangs past the timeout counts as busy (504), so it is retried. */
+  private async post(model: string, messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
+    try {
+      return await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        signal: AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]),
+        headers: this.headers,
+        body: JSON.stringify({ model, messages, tools, tool_choice: 'auto' }),
+      });
+    } catch (err) {
+      if (signal.aborted) throw err;
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        return new Response(null, { status: 504 });
+      }
+      throw err;
+    }
   }
 
   /** Free tiers are often overloaded: retry with backoff, then move to a backup model. */
   private async send(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
     if (this.model !== this.primary && Date.now() > this.backupUntil) this.model = this.primary;
     let res = await this.post(this.model, messages, tools, signal);
-    for (const delay of this.retryDelaysMs) {
+    for (const [i, delay] of this.retryDelaysMs.entries()) {
       if (!BUSY.has(res.status)) return res;
+      this.notice(`${this.model} is ${res.status === 504 ? 'slow' : 'busy'} (${res.status}). Retrying, ${i + 1} of ${this.retryDelaysMs.length}…`);
       await sleep(delay, signal);
       res = await this.post(this.model, messages, tools, signal);
     }
@@ -147,9 +166,10 @@ export class OpenAICompatibleLLM implements LLM {
 
     if (!this.fallbacks.length) this.fallbacks = rankModels(await this.listModels(), modelFamily(this.primary)).slice(0, 4);
     for (const backup of this.fallbacks.filter((m) => m !== this.model)) {
+      this.notice(`Trying backup model ${backup}…`);
       const attempt = await this.post(backup, messages, tools, signal);
       if (attempt.ok) {
-        console.log(`  Model ${this.model} is busy, using ${backup} for the next few minutes`);
+        this.notice(`Using ${backup} for the next few minutes while ${this.model} is busy.`);
         this.model = backup;
         this.backupUntil = Date.now() + this.backupMs;
         return attempt;
@@ -164,7 +184,7 @@ export class OpenAICompatibleLLM implements LLM {
       this.autoModel = false;
       const next = await this.newestModel();
       if (next && next !== this.model) {
-        console.log(`  Model ${this.model} is unavailable, switching to ${next}`);
+        this.notice(`${this.model} is unavailable, switching to ${next}.`);
         this.model = this.primary = next;
         return this.chat(messages, tools, signal);
       }
@@ -199,6 +219,7 @@ export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): LLM {
   if (!env.LLM_API_KEY && provider !== 'ollama') {
     throw new Error(`LLM_API_KEY is missing. Copy .env.example to .env and add a free ${provider} key.`);
   }
+  const timeoutMs = Number(env.LLM_TIMEOUT_MS) || 45_000;
   const fallbacks = (env.LLM_FALLBACK_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);
-  return new OpenAICompatibleLLM(baseUrl, model, env.LLM_API_KEY, !env.LLM_MODEL, fallbacks);
+  return new OpenAICompatibleLLM(baseUrl, model, env.LLM_API_KEY, !env.LLM_MODEL, fallbacks, undefined, undefined, timeoutMs);
 }

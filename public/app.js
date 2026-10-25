@@ -57,6 +57,12 @@ function shush() {
 }
 
 function handle(e) {
+  const working = thinking.isConnected;
+  dispatch(e);
+  if (working && thinking.isConnected && e.type !== 'status') showThinking();
+}
+
+function dispatch(e) {
   switch (e.type) {
     case 'hello':
       $('model').textContent = e.model;
@@ -113,6 +119,9 @@ function handle(e) {
       add('done', e.text);
       speak(e.text);
       break;
+    case 'notice':
+      add('notice', e.text);
+      break;
     case 'stopped':
       add('notice', 'Stopped. Waiting for your next instruction.');
       break;
@@ -122,8 +131,20 @@ function handle(e) {
   }
 }
 
+const thinking = document.createElement('div');
+thinking.className = 'ev thinking';
+thinking.textContent = 'Thinking';
+
 function setRunning(running) {
   $('status-dot').classList.toggle('running', running);
+  if (running) showThinking();
+  else thinking.remove();
+}
+
+// Keep the "Thinking…" row at the bottom of the log while the agent works.
+function showThinking() {
+  log.appendChild(thinking);
+  log.scrollTop = log.scrollHeight;
 }
 
 function send() {
