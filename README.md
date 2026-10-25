@@ -4,6 +4,8 @@
 
 Built for the WeMakeDevs × Wispr Flow **No Hands** hackathon.
 
+![Flow Agent fixing a failing test](docs/screenshot.png)
+
 ## Quick start (Windows, macOS, Linux)
 
 You need Node 20.12 or newer. You don't need a paid API key.
@@ -31,7 +33,7 @@ Every provider is reached through the same OpenAI-compatible API, so switching i
 
 | `LLM_PROVIDER` | Cost | Notes |
 |---|---|---|
-| `gemini` (default) | Free tier | `gemini-2.5-flash` |
+| `gemini` (default) | Free tier | `gemini-3.8-flash`. If Google retires it, the newest available model is picked on its own |
 | `groq` | Free tier | `llama-3.3-70b-versatile` |
 | `ollama` | Free, runs locally | No key needed. Pull a model first, for example `ollama pull qwen2.5-coder:7b` |
 | anything else | – | Set `LLM_BASE_URL` and `LLM_MODEL` |
@@ -40,6 +42,7 @@ Every provider is reached through the same OpenAI-compatible API, so switching i
 
 - **Voice in:** Wispr Flow types your words into the command box. The app spots dictation (whole phrases arriving at once, not single key presses) and sends it automatically after a short pause, so you never touch the keyboard. Say just "stop" to halt the agent.
 - **Barge-in:** anything you say while the agent is working is an interruption. The model request in flight is aborted, any tool calls it hadn't run yet are marked as skipped, and the loop restarts with your interruption added to the same conversation, so the agent re-plans instead of starting over.
+- **Edit, test, fix:** the agent edits files with exact-snippet replacements (diffs show live in the UI), runs your test command, and keeps fixing until the tests pass. A running test is killed the moment you barge in. Destructive commands such as `rm -rf /` or `git push --force` are refused.
 - **Voice out:** the agent says one short sentence before each action, and the browser reads it aloud. As soon as you start dictating, it goes quiet.
 
 ## Development
@@ -52,7 +55,7 @@ npm run typecheck
 ## Roadmap
 
 - [x] Day 1: voice loop, agent core, read-only file tools, barge-in
-- [ ] Day 2: file edits and running tests
+- [x] Day 2: file edits with live diffs, running tests, and fix-until-green
 - [ ] Day 3: live plan view and smarter re-planning
 - [ ] Day 4: git branches and PRs, plus meeting transcript input
 - [ ] Day 5: dogfooding Flow Agent on itself, and polish

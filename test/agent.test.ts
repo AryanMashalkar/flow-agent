@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent, type AgentEvent } from '../src/agent.ts';
 import type { ChatMessage, ChatResult, LLM } from '../src/llm.ts';
-import { readOnlyTools, resolveInside } from '../src/tools.ts';
+import { allTools, readOnlyTools, resolveInside, type FileChange, type ToolContext } from '../src/tools.ts';
+import { pickModel } from '../src/llm.ts';
 
 /** A fake model that replays scripted replies, optionally waiting until aborted. */
 class ScriptedLLM implements LLM {
@@ -21,6 +22,10 @@ class ScriptedLLM implements LLM {
     }
     return next;
   }
+}
+
+function ctx(changes: FileChange[] = [], signal = new AbortController().signal): ToolContext {
+  return { signal, onFileChange: (c) => changes.push(c) };
 }
 
 function call(id: string, name: string, args: object) {
@@ -88,7 +93,7 @@ test('interrupt between tool calls answers the skipped calls', async () => {
   let agentRef: Agent;
   const tools = readOnlyTools(dir).map((t) =>
     t.spec.function.name === 'list_files'
-      ? { ...t, run: async (a: Record<string, unknown>) => { void agentRef.submit('actually, just read db.ts'); return t.run(a); } }
+      ? { ...t, run: async (a: Record<string, unknown>, ctx: ToolContext) => { void agentRef.submit('actually, just read db.ts'); return t.run(a, ctx); } }
       : t,
   );
   const llm = new ScriptedLLM([
@@ -134,7 +139,62 @@ test('tools refuse paths outside the workspace and skip node_modules', async () 
   const dir = await workspace();
   assert.throws(() => resolveInside(dir, '../secrets.txt'), /outside the workspace/);
   const list = readOnlyTools(dir).find((t) => t.spec.function.name === 'list_files')!;
-  const out = await list.run({});
+  const out = await list.run({}, ctx());
   assert.match(out, /src\/db\.ts/);
   assert.doesNotMatch(out, /node_modules/);
+});
+
+function byName(dir: string, name: string) {
+  return allTools(dir).find((t) => t.spec.function.name === name)!;
+}
+
+test('edit_file replaces exactly one match and reports a diff', async () => {
+  const dir = await workspace();
+  const changes: FileChange[] = [];
+  const out = await byName(dir, 'edit_file').run({ path: 'src/db.ts', old_text: '"sqlite"', new_text: '"postgres"' }, ctx(changes));
+  assert.equal(out, 'Edited src/db.ts.');
+  assert.equal(await readFile(path.join(dir, 'src/db.ts'), 'utf8'), 'export const db = "postgres";\n');
+  assert.deepEqual(changes, [{ path: 'src/db.ts', diff: '-"sqlite"\n+"postgres"', created: false }]);
+  await assert.rejects(byName(dir, 'edit_file').run({ path: 'src/db.ts', old_text: 'nope', new_text: 'x' }, ctx()), /not found/);
+});
+
+test('edit_file matches LF snippets inside CRLF files', async () => {
+  const dir = await workspace();
+  await writeFile(path.join(dir, 'win.txt'), 'a\r\nb\r\nc\r\n');
+  await byName(dir, 'edit_file').run({ path: 'win.txt', old_text: 'a\nb', new_text: 'A\nB' }, ctx());
+  assert.equal(await readFile(path.join(dir, 'win.txt'), 'utf8'), 'A\r\nB\r\nc\r\n');
+});
+
+test('write_file creates folders and flags new files', async () => {
+  const dir = await workspace();
+  const changes: FileChange[] = [];
+  await byName(dir, 'write_file').run({ path: 'src/models/user.ts', content: 'export type User = {};\n' }, ctx(changes));
+  assert.equal(changes[0].created, true);
+  assert.equal(changes[0].diff, '+export type User = {};');
+  await assert.rejects(byName(dir, 'write_file').run({ path: '../evil.ts', content: '' }, ctx()), /outside the workspace/);
+});
+
+test('run_command returns exit code and output, and blocks destructive commands', async () => {
+  const dir = await workspace();
+  const run = byName(dir, 'run_command');
+  assert.match(await run.run({ command: 'node -e "console.log(41+1); process.exit(3)"' }, ctx()), /^Exit code 3\n42/);
+  await assert.rejects(run.run({ command: 'git push --force origin main' }, ctx()), /destructive/);
+  await assert.rejects(run.run({ command: 'rm -rf /' }, ctx()), /destructive/);
+});
+
+test('run_command is killed when the user barges in', async () => {
+  const dir = await workspace();
+  const controller = new AbortController();
+  const started = Date.now();
+  const pending = byName(dir, 'run_command').run({ command: 'node -e "setTimeout(() => {}, 20000)"' }, ctx([], controller.signal));
+  setTimeout(() => controller.abort(), 200);
+  assert.equal(await pending, 'Command cancelled: the user interrupted.');
+  assert.ok(Date.now() - started < 5000);
+});
+
+test('pickModel prefers the newest general flash model', () => {
+  assert.equal(
+    pickModel(['models/gemini-2.5-flash', 'models/gemini-3.8-flash', 'models/gemini-3.8-flash-lite', 'models/gemini-3.8-pro-preview', 'models/text-embedding-004']),
+    'gemini-3.8-flash',
+  );
 });

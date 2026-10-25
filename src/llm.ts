@@ -30,33 +30,65 @@ export interface LLM {
 }
 
 const PRESETS: Record<string, { baseUrl: string; model: string }> = {
-  gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
+  gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.8-flash' },
   groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
   ollama: { baseUrl: 'http://localhost:11434/v1', model: 'qwen2.5-coder:7b' },
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
 };
 
-export class OpenAICompatibleLLM implements LLM {
-  readonly label: string;
+/** Rank model ids so the newest general-purpose "flash" style model comes first. */
+export function pickModel(ids: string[]): string | undefined {
+  const usable = ids
+    .map((id) => id.replace(/^models\//, ''))
+    .filter((id) => !/(embed|image|tts|audio|live|vision|guard|preview|exp|lite|nano)/i.test(id));
+  const version = (id: string) => Number(id.match(/(\d+(?:\.\d+)?)/)?.[1] ?? 0);
+  const score = (id: string) => version(id) * 10 + (/flash/i.test(id) ? 1 : 0);
+  return usable.sort((a, b) => score(b) - score(a))[0];
+}
 
+export class OpenAICompatibleLLM implements LLM {
   constructor(
     private baseUrl: string,
     private model: string,
     private apiKey: string | undefined,
-  ) {
-    this.label = model;
+    /** When the model was not chosen by the user, swap to the newest available one if it is retired. */
+    private autoModel = false,
+  ) {}
+
+  get label(): string {
+    return this.model;
+  }
+
+  private get headers(): Record<string, string> {
+    return {
+      'content-type': 'application/json',
+      ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
+    };
+  }
+
+  private async newestModel(): Promise<string | undefined> {
+    const res = await fetch(`${this.baseUrl.replace(/\/$/, '')}/models`, { headers: this.headers });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { data?: { id: string }[] };
+    return pickModel((data.data ?? []).map((m) => m.id));
   }
 
   async chat(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<ChatResult> {
     const res = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       signal,
-      headers: {
-        'content-type': 'application/json',
-        ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
-      },
+      headers: this.headers,
       body: JSON.stringify({ model: this.model, messages, tools, tool_choice: 'auto' }),
     });
+    if (res.status === 404 && this.autoModel) {
+      this.autoModel = false;
+      const next = await this.newestModel();
+      if (next && next !== this.model) {
+        console.log(`  Model ${this.model} is unavailable, switching to ${next}`);
+        this.model = next;
+        return this.chat(messages, tools, signal);
+      }
+    }
     if (!res.ok) {
       throw new Error(`Model API ${res.status}: ${(await res.text()).slice(0, 500)}`);
     }
@@ -84,5 +116,5 @@ export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): LLM {
   if (!env.LLM_API_KEY && provider !== 'ollama') {
     throw new Error(`LLM_API_KEY is missing. Copy .env.example to .env and add a free ${provider} key.`);
   }
-  return new OpenAICompatibleLLM(baseUrl, model, env.LLM_API_KEY);
+  return new OpenAICompatibleLLM(baseUrl, model, env.LLM_API_KEY, !env.LLM_MODEL);
 }
