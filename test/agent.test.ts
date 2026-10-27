@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Agent, type AgentEvent } from '../src/agent.ts';
+import { Agent, compactHistory, type AgentEvent } from '../src/agent.ts';
 import type { ChatMessage, ChatResult, LLM } from '../src/llm.ts';
 import { allTools, readOnlyTools, resolveInside, type FileChange, type ToolContext } from '../src/tools.ts';
 import { OpenAICompatibleLLM, pickModel, rankModels, stripThoughts } from '../src/llm.ts';
@@ -291,5 +291,37 @@ test('a request that hangs past the timeout is retried, with a notice', async ()
   assert.equal(out.content, 'finally');
   assert.match(notices[0], /main is slow \(504\)/);
   server.closeAllConnections();
+  server.close();
+});
+
+test('old tool results are shortened before sending, recent ones kept', () => {
+  const big = 'x'.repeat(1000);
+  const history: ChatMessage[] = [{ role: 'user', content: 'go' }];
+  for (let i = 0; i < 8; i++) history.push({ role: 'tool', tool_call_id: String(i), content: big });
+  const out = compactHistory(history);
+  assert.match(out[1].content!, /older result shortened/);
+  assert.match(out[2].content!, /older result shortened/);
+  assert.equal(out[3].content, big);
+  assert.equal(out.at(-1)!.content, big);
+  assert.equal(history[1].content, big, 'the real history is not modified');
+});
+
+test('a malformed tool call from the provider is retried', async () => {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (++calls === 1) {
+        res.statusCode = 400;
+        return res.end(JSON.stringify({ error: { code: 'tool_use_failed' } }));
+      }
+      res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const url = `http://localhost:${(server.address() as { port: number }).port}`;
+  const llm = new OpenAICompatibleLLM(url, 'main', 'k', false, [], [1]);
+  assert.equal((await llm.chat([], [], new AbortController().signal)).content, 'ok');
   server.close();
 });

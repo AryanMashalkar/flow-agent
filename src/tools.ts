@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { ToolSpec } from './llm.ts';
 
 const IGNORED = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.venv']);
-const MAX_READ = 40_000;
+const MAX_READ = 20_000;
 
 export interface Tool {
   spec: ToolSpec;

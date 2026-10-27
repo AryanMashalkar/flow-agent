@@ -31,6 +31,11 @@ export interface LLM {
   chat(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<ChatResult>;
 }
 
+const KEY_URLS: Record<string, string> = {
+  groq: 'https://console.groq.com/keys',
+  gemini: 'https://aistudio.google.com/apikey',
+};
+
 const PRESETS: Record<string, { baseUrl: string; model: string }> = {
   gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.8-flash' },
   groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
@@ -38,7 +43,7 @@ const PRESETS: Record<string, { baseUrl: string; model: string }> = {
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
 };
 
-const SKIP_MODELS = /(embed|image|tts|audio|live|vision|guard|preview|exp|nano)/i;
+const SKIP_MODELS = /(embed|image|tts|audio|live|vision|guard|preview|exp|nano|whisper|compound)/i;
 
 /** Rank chat models newest first, preferring full "flash" models over "lite" ones. */
 export function rankModels(ids: string[], family?: string): string[] {
@@ -137,12 +142,16 @@ export class OpenAICompatibleLLM implements LLM {
   /** One request. A request that hangs past the timeout counts as busy (504), so it is retried. */
   private async post(model: string, messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
     try {
-      return await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      const res = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         signal: AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]),
         headers: this.headers,
         body: JSON.stringify({ model, messages, tools, tool_choice: 'auto' }),
       });
+      if (res.status !== 400) return res;
+      // Groq rejects a reply when the model writes a malformed tool call; a retry usually gets a good one.
+      const text = await res.text();
+      return new Response(text, { status: text.includes('tool_use_failed') ? 502 : 400 });
     } catch (err) {
       if (signal.aborted) throw err;
       if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
@@ -209,7 +218,7 @@ export class OpenAICompatibleLLM implements LLM {
 }
 
 export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): LLM {
-  const provider = (env.LLM_PROVIDER || 'gemini').toLowerCase();
+  const provider = (env.LLM_PROVIDER || 'groq').toLowerCase();
   const preset = PRESETS[provider];
   const baseUrl = env.LLM_BASE_URL || preset?.baseUrl;
   const model = env.LLM_MODEL || preset?.model;
@@ -217,7 +226,7 @@ export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): LLM {
     throw new Error(`Unknown LLM_PROVIDER "${provider}". Set LLM_BASE_URL and LLM_MODEL for a custom provider.`);
   }
   if (!env.LLM_API_KEY && provider !== 'ollama') {
-    throw new Error(`LLM_API_KEY is missing. Copy .env.example to .env and add a free ${provider} key.`);
+    throw new Error(`LLM_API_KEY is missing. Copy .env.example to .env and add a free ${provider} key${KEY_URLS[provider] ? ` from ${KEY_URLS[provider]}` : ''}.`);
   }
   const timeoutMs = Number(env.LLM_TIMEOUT_MS) || 45_000;
   const fallbacks = (env.LLM_FALLBACK_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);

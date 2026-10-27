@@ -26,6 +26,26 @@ Rules:
 - The user may interrupt you mid-task. An interruption overrides the earlier instruction: drop work that no longer fits, re-plan out loud in one sentence, and continue.
 - When finished, give a short spoken summary (one to three sentences). Put any file paths or code after the summary.`;
 
+const KEEP_FULL_TOOL_RESULTS = 6;
+const OLD_RESULT_CHARS = 400;
+
+/**
+ * Free tiers have small per-minute token budgets, so only the latest tool results are sent in
+ * full. Older ones are cut short; the model can re-read a file if it needs it again.
+ */
+export function compactHistory(history: ChatMessage[]): ChatMessage[] {
+  let recent = 0;
+  return history
+    .slice()
+    .reverse()
+    .map((m) => {
+      if (m.role !== 'tool' || !m.content) return m;
+      if (++recent <= KEEP_FULL_TOOL_RESULTS || m.content.length <= OLD_RESULT_CHARS) return m;
+      return { ...m, content: `${m.content.slice(0, OLD_RESULT_CHARS)}\n…(older result shortened)` };
+    })
+    .reverse();
+}
+
 export interface AgentOptions {
   llm: LLM;
   tools: Tool[];
@@ -103,7 +123,7 @@ export class Agent extends EventEmitter {
       for (let step = 0; step < this.maxSteps; step++) {
         let reply;
         try {
-          reply = await this.opts.llm.chat(this.history, [...this.tools.values()].map((t) => t.spec), signal);
+          reply = await this.opts.llm.chat(compactHistory(this.history), [...this.tools.values()].map((t) => t.spec), signal);
         } catch (err) {
           if (signal.aborted) return;
           throw err;
