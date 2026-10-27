@@ -7,7 +7,7 @@ import { Agent, compactHistory, type AgentEvent } from '../src/agent.ts';
 import type { Plan } from '../src/plan.ts';
 import type { ChatMessage, ChatResult, LLM } from '../src/llm.ts';
 import { allTools, readOnlyTools, resolveInside, type FileChange, type ToolContext } from '../src/tools.ts';
-import { OpenAICompatibleLLM, pickModel, rankModels, stripThoughts } from '../src/llm.ts';
+import { OpenAICompatibleLLM, pickModel, rankModels, retryAfterSeconds, stripThoughts } from '../src/llm.ts';
 import http from 'node:http';
 
 /** A fake model that replays scripted replies, optionally waiting until aborted. */
@@ -219,7 +219,14 @@ async function fakeProvider(statuses: number[], models: string[] = []) {
   });
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
-  return { url: `http://localhost:${port}`, seen, close: () => server.close() };
+  return {
+    url: `http://localhost:${port}`,
+    seen,
+    close: () => {
+      server.closeAllConnections();
+      server.close();
+    },
+  };
 }
 
 test('retries a busy model, then succeeds', async () => {
@@ -365,4 +372,30 @@ test('a bad plan is reported back to the model instead of crashing', async () =>
   const agent = new Agent({ llm, tools: [] });
   await agent.submit('do it');
   assert.match(agent.history.find((m) => m.tool_call_id === 'p1')!.content!, /non-empty list/);
+});
+
+test('a rate limit goes to a backup model at once instead of burning retries', async () => {
+  const p = await fakeProvider([429, 200], ['gemini-3.8-flash', 'gemini-3.6-flash']);
+  const llm = new OpenAICompatibleLLM(p.url, 'gemini-3.8-flash', 'k', false, [], [1, 1, 1]);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from gemini-3.6-flash');
+  assert.deepEqual(p.seen, ['gemini-3.8-flash', 'gemini-3.6-flash']);
+  p.close();
+});
+
+test('a rate limit with no backup waits, then tries once more', async () => {
+  const p = await fakeProvider([429, 200], ['only-model']);
+  const llm = new OpenAICompatibleLLM(p.url, 'only-model', 'k', false, ['only-model'], [1], 60_000, 45_000, 0);
+  const notices: string[] = [];
+  llm.onNotice = (t) => notices.push(t);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from only-model');
+  assert.ok(notices.some((n) => /Free-tier limit reached/.test(n)));
+  p.close();
+});
+
+test('retryAfterSeconds reads headers and Gemini retryDelay', () => {
+  assert.equal(retryAfterSeconds(new Headers({ 'retry-after': '7' }), ''), 7);
+  assert.equal(retryAfterSeconds(new Headers(), '[{"error":{"details":[{"retryDelay": "23.4s"}]}}]'), 24);
+  assert.equal(retryAfterSeconds(new Headers(), 'nothing'), undefined);
 });

@@ -76,6 +76,14 @@ export function pickModel(ids: string[]): string | undefined {
 /** Statuses that mean "busy, try again", not "your request is wrong". */
 const BUSY = new Set([429, 500, 502, 503, 504]);
 
+/** How long the provider asks us to wait, from a Retry-After header or Gemini's "retryDelay": "23s". */
+export function retryAfterSeconds(headers: Headers, body: string): number | undefined {
+  const header = Number(headers.get('retry-after'));
+  if (header > 0) return Math.ceil(header);
+  const m = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+  return m ? Math.ceil(Number(m[1])) : undefined;
+}
+
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) return reject(new Error('aborted'));
@@ -104,6 +112,8 @@ export class OpenAICompatibleLLM implements LLM {
     private retryDelaysMs = [1000, 2000, 4000],
     private backupMs = 10 * 60_000,
     private timeoutMs = 45_000,
+    /** How long to wait after a 429 when the provider doesn't say. */
+    private rateLimitWaitS = 20,
   ) {
     this.model = primary;
   }
@@ -161,18 +171,8 @@ export class OpenAICompatibleLLM implements LLM {
     }
   }
 
-  /** Free tiers are often overloaded: retry with backoff, then move to a backup model. */
-  private async send(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
-    if (this.model !== this.primary && Date.now() > this.backupUntil) this.model = this.primary;
-    let res = await this.post(this.model, messages, tools, signal);
-    for (const [i, delay] of this.retryDelaysMs.entries()) {
-      if (!BUSY.has(res.status)) return res;
-      this.notice(`${this.model} is ${res.status === 504 ? 'slow' : 'busy'} (${res.status}). Retrying, ${i + 1} of ${this.retryDelaysMs.length}…`);
-      await sleep(delay, signal);
-      res = await this.post(this.model, messages, tools, signal);
-    }
-    if (!BUSY.has(res.status)) return res;
-
+  /** Try each backup model once. Backups that don't exist for this key are forgotten. */
+  private async tryBackups(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response | null> {
     if (!this.fallbacks.length) this.fallbacks = rankModels(await this.listModels(), modelFamily(this.primary)).slice(0, 4);
     for (const backup of this.fallbacks.filter((m) => m !== this.model)) {
       this.notice(`Trying backup model ${backup}…`);
@@ -183,8 +183,40 @@ export class OpenAICompatibleLLM implements LLM {
         this.backupUntil = Date.now() + this.backupMs;
         return attempt;
       }
+      if (attempt.status === 404 || attempt.status === 400) this.fallbacks = this.fallbacks.filter((m) => m !== backup);
     }
-    return res;
+    return null;
+  }
+
+  /**
+   * Free tiers fail in two ways. 429 means this model's quota is used up: retrying it right away
+   * only burns more quota, so try backups (each model has its own quota), then wait as long as the
+   * provider asks. 5xx means the model is overloaded: retry with backoff, then try backups.
+   */
+  private async send(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
+    if (this.model !== this.primary && Date.now() > this.backupUntil) this.model = this.primary;
+    let res = await this.post(this.model, messages, tools, signal);
+
+    if (res.status === 429) {
+      const body = await res.text();
+      const backup = await this.tryBackups(messages, tools, signal);
+      if (backup) return backup;
+      const wait = Math.min(retryAfterSeconds(res.headers, body) ?? this.rateLimitWaitS, 60);
+      this.notice(`Free-tier limit reached for ${this.model}. Waiting ${wait}s before trying again…`);
+      await sleep(wait * 1000, signal);
+      res = await this.post(this.model, messages, tools, signal);
+      if (res.status !== 429) return res;
+      return new Response(body, { status: 429 });
+    }
+
+    for (const [i, delay] of this.retryDelaysMs.entries()) {
+      if (!BUSY.has(res.status) || res.status === 429) return res;
+      this.notice(`${this.model} is ${res.status === 504 ? 'slow' : 'busy'} (${res.status}). Retrying, ${i + 1} of ${this.retryDelaysMs.length}…`);
+      await sleep(delay, signal);
+      res = await this.post(this.model, messages, tools, signal);
+    }
+    if (!BUSY.has(res.status)) return res;
+    return (await this.tryBackups(messages, tools, signal)) ?? res;
   }
 
   async chat(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<ChatResult> {
@@ -198,8 +230,11 @@ export class OpenAICompatibleLLM implements LLM {
         return this.chat(messages, tools, signal);
       }
     }
+    if (res.status === 429) {
+      throw new Error('The free-tier limit for this key is used up for now. Wait a minute and try again. Shorter tasks use fewer requests.');
+    }
     if (BUSY.has(res.status)) {
-      throw new Error(`The model is overloaded right now (${res.status}) and no backup model answered. Wait a minute and try again, or set LLM_PROVIDER=groq in .env.`);
+      throw new Error(`The model is overloaded right now (${res.status}) and no backup model answered. Wait a minute and try again.`);
     }
     if (!res.ok) {
       throw new Error(`Model API ${res.status}: ${(await res.text()).slice(0, 500)}`);

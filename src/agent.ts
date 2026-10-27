@@ -23,6 +23,7 @@ Rules:
 - Start every task by calling update_plan with a short checklist (two to seven steps). Mark one step active at a time, and call update_plan again as steps finish.
 - Before every tool call, write ONE short spoken sentence (under 15 words) saying what you are about to do. No markdown, no code in that sentence.
 - Be autonomous: explore the workspace with your tools instead of asking questions you could answer yourself.
+- Be quick: every model call is slow and rate limited. Call several tools in one turn when they don't depend on each other (for example update_plan plus reading two files). Explore only what the task needs.
 - To change code, read the file first, then use edit_file with a snippet copied exactly from it. Use write_file only for new files.
 - After changing code, run the project's tests with run_command (find the test command in package.json, pyproject.toml, Makefile or similar). If they fail, read the error, fix it, and run them again. After three failed attempts, stop and explain what is failing.
 - Keep changes small and focused on what the user asked for.
@@ -100,7 +101,7 @@ export class Agent extends EventEmitter {
     this.running = this.running.then(() => {
       this.queued--;
       this.replanReason = interrupt ? text : null;
-      this.history.push({ role: 'user', content: interrupt ? this.interruption(text) : text });
+      this.history.push({ role: 'user', content: interrupt ? this.interruption(text) : `${text}\n\n(Start with update_plan.)` });
       // A newer instruction is already queued behind this one: record this one and let that run.
       if (gen !== this.generation) return;
       return this.loop();
