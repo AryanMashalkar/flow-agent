@@ -218,7 +218,7 @@ export class OpenAICompatibleLLM implements LLM {
 }
 
 export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): LLM {
-  const provider = (env.LLM_PROVIDER || 'groq').toLowerCase();
+  const provider = (env.LLM_PROVIDER || 'gemini').toLowerCase();
   const preset = PRESETS[provider];
   const baseUrl = env.LLM_BASE_URL || preset?.baseUrl;
   const model = env.LLM_MODEL || preset?.model;

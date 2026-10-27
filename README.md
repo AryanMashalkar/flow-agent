@@ -17,7 +17,7 @@ npm install
 copy .env.example .env      # on macOS/Linux: cp .env.example .env
 ```
 
-Get a **free** Groq key at <https://console.groq.com/keys> (no card needed) and put it in `.env` as `LLM_API_KEY`. Then:
+Get a **free** Gemini key at <https://aistudio.google.com/apikey> (no card needed) and put it in `.env` as `LLM_API_KEY`. Then:
 
 ```bash
 npm start
@@ -33,8 +33,8 @@ If the default model is ever retired, the newest one your key can use is picked 
 
 | `LLM_PROVIDER` | Cost | Notes |
 |---|---|---|
-| `groq` (default) | Free tier, fastest | `llama-3.3-70b-versatile` |
-| `gemini` | Free tier | `gemini-3.8-flash` |
+| `gemini` (default) | Free tier | `gemini-3.8-flash` |
+| `groq` | Free tier, fastest | `llama-3.3-70b-versatile` |
 | `ollama` | Free, runs locally | No key needed. Pull a model first, for example `ollama pull qwen2.5-coder:7b` |
 | anything else | – | Set `LLM_BASE_URL` and `LLM_MODEL` |
 
