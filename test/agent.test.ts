@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Agent, type AgentEvent } from '../src/agent.ts';
+import { Agent, compactHistory, type AgentEvent } from '../src/agent.ts';
 import type { ChatMessage, ChatResult, LLM } from '../src/llm.ts';
-import { readOnlyTools, resolveInside } from '../src/tools.ts';
+import { allTools, readOnlyTools, resolveInside, type FileChange, type ToolContext } from '../src/tools.ts';
+import { OpenAICompatibleLLM, pickModel, rankModels, stripThoughts } from '../src/llm.ts';
+import http from 'node:http';
 
 /** A fake model that replays scripted replies, optionally waiting until aborted. */
 class ScriptedLLM implements LLM {
@@ -21,6 +23,10 @@ class ScriptedLLM implements LLM {
     }
     return next;
   }
+}
+
+function ctx(changes: FileChange[] = [], signal = new AbortController().signal): ToolContext {
+  return { signal, onFileChange: (c) => changes.push(c) };
 }
 
 function call(id: string, name: string, args: object) {
@@ -88,7 +94,7 @@ test('interrupt between tool calls answers the skipped calls', async () => {
   let agentRef: Agent;
   const tools = readOnlyTools(dir).map((t) =>
     t.spec.function.name === 'list_files'
-      ? { ...t, run: async (a: Record<string, unknown>) => { void agentRef.submit('actually, just read db.ts'); return t.run(a); } }
+      ? { ...t, run: async (a: Record<string, unknown>, ctx: ToolContext) => { void agentRef.submit('actually, just read db.ts'); return t.run(a, ctx); } }
       : t,
   );
   const llm = new ScriptedLLM([
@@ -134,7 +140,188 @@ test('tools refuse paths outside the workspace and skip node_modules', async () 
   const dir = await workspace();
   assert.throws(() => resolveInside(dir, '../secrets.txt'), /outside the workspace/);
   const list = readOnlyTools(dir).find((t) => t.spec.function.name === 'list_files')!;
-  const out = await list.run({});
+  const out = await list.run({}, ctx());
   assert.match(out, /src\/db\.ts/);
   assert.doesNotMatch(out, /node_modules/);
+});
+
+function byName(dir: string, name: string) {
+  return allTools(dir).find((t) => t.spec.function.name === name)!;
+}
+
+test('edit_file replaces exactly one match and reports a diff', async () => {
+  const dir = await workspace();
+  const changes: FileChange[] = [];
+  const out = await byName(dir, 'edit_file').run({ path: 'src/db.ts', old_text: '"sqlite"', new_text: '"postgres"' }, ctx(changes));
+  assert.equal(out, 'Edited src/db.ts.');
+  assert.equal(await readFile(path.join(dir, 'src/db.ts'), 'utf8'), 'export const db = "postgres";\n');
+  assert.deepEqual(changes, [{ path: 'src/db.ts', diff: '-"sqlite"\n+"postgres"', created: false }]);
+  await assert.rejects(byName(dir, 'edit_file').run({ path: 'src/db.ts', old_text: 'nope', new_text: 'x' }, ctx()), /not found/);
+});
+
+test('edit_file matches LF snippets inside CRLF files', async () => {
+  const dir = await workspace();
+  await writeFile(path.join(dir, 'win.txt'), 'a\r\nb\r\nc\r\n');
+  await byName(dir, 'edit_file').run({ path: 'win.txt', old_text: 'a\nb', new_text: 'A\nB' }, ctx());
+  assert.equal(await readFile(path.join(dir, 'win.txt'), 'utf8'), 'A\r\nB\r\nc\r\n');
+});
+
+test('write_file creates folders and flags new files', async () => {
+  const dir = await workspace();
+  const changes: FileChange[] = [];
+  await byName(dir, 'write_file').run({ path: 'src/models/user.ts', content: 'export type User = {};\n' }, ctx(changes));
+  assert.equal(changes[0].created, true);
+  assert.equal(changes[0].diff, '+export type User = {};');
+  await assert.rejects(byName(dir, 'write_file').run({ path: '../evil.ts', content: '' }, ctx()), /outside the workspace/);
+});
+
+test('run_command returns exit code and output, and blocks destructive commands', async () => {
+  const dir = await workspace();
+  const run = byName(dir, 'run_command');
+  assert.match(await run.run({ command: 'node -e "console.log(41+1); process.exit(3)"' }, ctx()), /^Exit code 3\n42/);
+  await assert.rejects(run.run({ command: 'git push --force origin main' }, ctx()), /destructive/);
+  await assert.rejects(run.run({ command: 'rm -rf /' }, ctx()), /destructive/);
+});
+
+test('run_command is killed when the user barges in', async () => {
+  const dir = await workspace();
+  const controller = new AbortController();
+  const started = Date.now();
+  const pending = byName(dir, 'run_command').run({ command: 'node -e "setTimeout(() => {}, 20000)"' }, ctx([], controller.signal));
+  setTimeout(() => controller.abort(), 200);
+  assert.equal(await pending, 'Command cancelled: the user interrupted.');
+  assert.ok(Date.now() - started < 5000);
+});
+
+test('pickModel prefers the newest general flash model', () => {
+  assert.equal(
+    pickModel(['models/gemini-2.5-flash', 'models/gemini-3.8-flash', 'models/gemini-3.8-flash-lite', 'models/gemini-3.8-pro-preview', 'models/text-embedding-004']),
+    'gemini-3.8-flash',
+  );
+});
+
+/** A fake OpenAI-compatible server that answers with the given statuses in order. */
+async function fakeProvider(statuses: number[], models: string[] = []) {
+  const seen: string[] = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.endsWith('/models')) return res.end(JSON.stringify({ data: models.map((id) => ({ id })) }));
+      const model = JSON.parse(body).model;
+      seen.push(model);
+      const status = statuses.shift() ?? 200;
+      res.statusCode = status;
+      res.end(JSON.stringify(status === 200 ? { choices: [{ message: { content: `hi from ${model}` } }] } : { error: 'busy' }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const port = (server.address() as { port: number }).port;
+  return { url: `http://localhost:${port}`, seen, close: () => server.close() };
+}
+
+test('retries a busy model, then succeeds', async () => {
+  const p = await fakeProvider([503, 503, 200]);
+  const llm = new OpenAICompatibleLLM(p.url, 'main', 'k', false, [], [1, 1, 1]);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from main');
+  assert.deepEqual(p.seen, ['main', 'main', 'main']);
+  p.close();
+});
+
+test('switches to a backup model when the main one stays busy', async () => {
+  const p = await fakeProvider([503, 503, 503, 503, 200], ['models/gemini-3.8-flash', 'models/gemini-3.8-flash-lite', 'models/text-embedding-004']);
+  const llm = new OpenAICompatibleLLM(p.url, 'gemini-3.8-flash', 'k', false, [], [1, 1, 1]);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from gemini-3.8-flash-lite');
+  assert.equal(llm.label, 'gemini-3.8-flash-lite');
+  p.close();
+});
+
+test('a barge-in cancels the retry wait', async () => {
+  const p = await fakeProvider([503, 503, 503, 503]);
+  const llm = new OpenAICompatibleLLM(p.url, 'main', 'k', false, [], [10_000]);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 100);
+  const started = Date.now();
+  await assert.rejects(llm.chat([], [], controller.signal));
+  assert.ok(Date.now() - started < 2000);
+  p.close();
+});
+
+test('backups prefer the same model family', () => {
+  const ids = ['models/gemma-4-26b-a4b-it', 'models/gemini-3.8-flash', 'models/gemini-3.8-flash-lite', 'models/gemini-3.5-flash'];
+  assert.deepEqual(rankModels(ids, 'gemini').slice(0, 3), ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.8-flash-lite']);
+});
+
+test('private reasoning is stripped from replies', () => {
+  assert.equal(stripThoughts('<thought>The user wants files.\nLet me check.</thought>I will list the files.'), 'I will list the files.');
+  assert.equal(stripThoughts('<think>still thinking with no end'), '');
+  assert.equal(stripThoughts('Plain answer.'), 'Plain answer.');
+});
+
+test('goes back to the main model once the backup window ends', async () => {
+  const p = await fakeProvider([503, 503, 200, 200], ['gemini-3.8-flash', 'gemini-3.8-flash-lite']);
+  const llm = new OpenAICompatibleLLM(p.url, 'gemini-3.8-flash', 'k', false, [], [1], 0);
+  await llm.chat([], [], new AbortController().signal);
+  assert.equal(llm.label, 'gemini-3.8-flash-lite');
+  await new Promise((r) => setTimeout(r, 5));
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from gemini-3.8-flash');
+  p.close();
+});
+
+test('a request that hangs past the timeout is retried, with a notice', async () => {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (++calls === 1) return; // never answer the first request
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ choices: [{ message: { content: 'finally' } }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const url = `http://localhost:${(server.address() as { port: number }).port}`;
+  const llm = new OpenAICompatibleLLM(url, 'main', 'k', false, [], [1], 60_000, 150);
+  const notices: string[] = [];
+  llm.onNotice = (t) => notices.push(t);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'finally');
+  assert.match(notices[0], /main is slow \(504\)/);
+  server.closeAllConnections();
+  server.close();
+});
+
+test('old tool results are shortened before sending, recent ones kept', () => {
+  const big = 'x'.repeat(1000);
+  const history: ChatMessage[] = [{ role: 'user', content: 'go' }];
+  for (let i = 0; i < 8; i++) history.push({ role: 'tool', tool_call_id: String(i), content: big });
+  const out = compactHistory(history);
+  assert.match(out[1].content!, /older result shortened/);
+  assert.match(out[2].content!, /older result shortened/);
+  assert.equal(out[3].content, big);
+  assert.equal(out.at(-1)!.content, big);
+  assert.equal(history[1].content, big, 'the real history is not modified');
+});
+
+test('a malformed tool call from the provider is retried', async () => {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (++calls === 1) {
+        res.statusCode = 400;
+        return res.end(JSON.stringify({ error: { code: 'tool_use_failed' } }));
+      }
+      res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const url = `http://localhost:${(server.address() as { port: number }).port}`;
+  const llm = new OpenAICompatibleLLM(url, 'main', 'k', false, [], [1]);
+  assert.equal((await llm.chat([], [], new AbortController().signal)).content, 'ok');
+  server.close();
 });

@@ -24,6 +24,25 @@ function add(cls, text) {
   return el;
 }
 
+let pendingCommand = null;
+
+function addDetails(title, status, open = false) {
+  const el = document.createElement('details');
+  el.className = 'ev';
+  el.open = open;
+  const summary = document.createElement('summary');
+  summary.textContent = title;
+  const badge = document.createElement('span');
+  badge.className = 'badge';
+  badge.textContent = status;
+  summary.appendChild(badge);
+  const pre = document.createElement('pre');
+  el.append(summary, pre);
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return { el, badge, pre };
+}
+
 function speak(text) {
   if (!$('narrate').checked || !('speechSynthesis' in window) || !text) return;
   // Speak only the prose, not trailing code or paths.
@@ -38,6 +57,12 @@ function shush() {
 }
 
 function handle(e) {
+  const working = thinking.isConnected;
+  dispatch(e);
+  if (working && thinking.isConnected && e.type !== 'status') showThinking();
+}
+
+function dispatch(e) {
   switch (e.type) {
     case 'hello':
       $('model').textContent = e.model;
@@ -48,7 +73,9 @@ function handle(e) {
       $('m-words').textContent = e.wordsDictated;
       $('m-instr').textContent = e.instructions;
       $('m-interrupts').textContent = e.interruptions;
-      $('m-tools').textContent = e.toolCalls;
+      $('m-files').textContent = e.filesChanged;
+      $('m-tests').textContent = e.testRuns;
+      if (e.model) $('model').textContent = e.model;
       break;
     case 'status':
       setRunning(e.running);
@@ -64,14 +91,36 @@ function handle(e) {
       speak(e.text);
       break;
     case 'tool':
-      add('tool', `→ ${e.name}(${JSON.stringify(e.args)})`);
+      if (e.name === 'run_command') pendingCommand = addDetails(`$ ${e.args.command}`, 'running…');
+      else if (e.name !== 'edit_file' && e.name !== 'write_file') add('tool', `→ ${e.name}(${JSON.stringify(e.args)})`);
       break;
     case 'tool_result':
-      if (!e.ok) add('tool fail', `✗ ${e.name}: ${e.preview}`);
+      if (e.name === 'run_command' && pendingCommand) {
+        const code = /^Exit code (\S+)/.exec(e.preview)?.[1];
+        const pass = e.ok && code === '0';
+        pendingCommand.badge.textContent = e.ok ? (code ? `exit ${code}` : 'cancelled') : 'error';
+        pendingCommand.badge.className = `badge ${pass ? 'pass' : 'fail'}`;
+        pendingCommand.pre.textContent = e.preview;
+        pendingCommand = null;
+      } else if (!e.ok) add('tool fail', `✗ ${e.name}: ${e.preview}`);
       break;
+    case 'file_changed': {
+      const d = addDetails(e.path, e.created ? 'new file' : 'edited', true);
+      d.pre.className = 'diff';
+      for (const line of e.diff.split('\n')) {
+        const span = document.createElement('span');
+        span.className = line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : '';
+        span.textContent = line + '\n';
+        d.pre.appendChild(span);
+      }
+      break;
+    }
     case 'done':
       add('done', e.text);
       speak(e.text);
+      break;
+    case 'notice':
+      add('notice', e.text);
       break;
     case 'stopped':
       add('notice', 'Stopped. Waiting for your next instruction.');
@@ -82,8 +131,20 @@ function handle(e) {
   }
 }
 
+const thinking = document.createElement('div');
+thinking.className = 'ev thinking';
+thinking.textContent = 'Thinking';
+
 function setRunning(running) {
   $('status-dot').classList.toggle('running', running);
+  if (running) showThinking();
+  else thinking.remove();
+}
+
+// Keep the "Thinking…" row at the bottom of the log while the agent works.
+function showThinking() {
+  log.appendChild(thinking);
+  log.scrollTop = log.scrollHeight;
 }
 
 function send() {

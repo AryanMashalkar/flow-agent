@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { Agent, type AgentEvent } from './agent.ts';
 import { llmFromEnv } from './llm.ts';
-import { readOnlyTools } from './tools.ts';
+import { allTools } from './tools.ts';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try {
@@ -17,9 +17,10 @@ try {
 const workspace = path.resolve(process.env.WORKSPACE || process.cwd());
 const port = Number(process.env.PORT) || 4242;
 const llm = llmFromEnv();
-const agent = new Agent({ llm, tools: readOnlyTools(workspace) });
+const agent = new Agent({ llm, tools: allTools(workspace) });
 
-const metrics = { wordsDictated: 0, instructions: 0, interruptions: 0, toolCalls: 0, startedAt: Date.now() };
+const metrics = { wordsDictated: 0, instructions: 0, interruptions: 0, toolCalls: 0, filesChanged: 0, testRuns: 0, startedAt: Date.now() };
+const changedFiles = new Set<string>();
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -52,14 +53,23 @@ function broadcast(msg: unknown): void {
 }
 
 agent.on('event', (e: AgentEvent) => {
-  if (e.type === 'tool') metrics.toolCalls++;
+  if (e.type === 'tool') {
+    metrics.toolCalls++;
+    if (e.name === 'run_command') metrics.testRuns++;
+  }
+  if (e.type === 'file_changed') {
+    changedFiles.add(e.path);
+    metrics.filesChanged = changedFiles.size;
+  }
   broadcast(e);
-  if (e.type === 'tool' || e.type === 'user') broadcast({ type: 'metrics', ...metrics });
+  if (e.type === 'tool' || e.type === 'user' || e.type === 'file_changed' || e.type === 'status') {
+    broadcast({ type: 'metrics', model: llm.label, ...metrics });
+  }
 });
 
 wss.on('connection', (ws: WebSocket) => {
   ws.send(JSON.stringify({ type: 'hello', workspace, model: llm.label, running: agent.busy }));
-  ws.send(JSON.stringify({ type: 'metrics', ...metrics }));
+  ws.send(JSON.stringify({ type: 'metrics', model: llm.label, ...metrics }));
   ws.on('message', (raw) => {
     let msg: { type?: string; text?: string };
     try {

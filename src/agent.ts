@@ -1,25 +1,50 @@
 import { EventEmitter } from 'node:events';
 import type { ChatMessage, LLM } from './llm.ts';
-import type { Tool } from './tools.ts';
+import type { FileChange, Tool } from './tools.ts';
 
 export type AgentEvent =
   | { type: 'user'; text: string; interrupt: boolean }
   | { type: 'say'; text: string }
   | { type: 'tool'; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; name: string; ok: boolean; preview: string }
+  | ({ type: 'file_changed' } & FileChange)
   | { type: 'interrupted'; text: string }
   | { type: 'stopped' }
   | { type: 'done'; text: string }
   | { type: 'error'; message: string }
-  | { type: 'status'; running: boolean };
+  | { type: 'status'; running: boolean }
+  | { type: 'notice'; text: string };
 
 const SYSTEM_PROMPT = `You are Flow Agent, a voice-native coding agent. The user talks to you by voice and hears your replies read aloud.
 
 Rules:
 - Before every tool call, write ONE short spoken sentence (under 15 words) saying what you are about to do. No markdown, no code in that sentence.
 - Be autonomous: explore the workspace with your tools instead of asking questions you could answer yourself.
+- To change code, read the file first, then use edit_file with a snippet copied exactly from it. Use write_file only for new files.
+- After changing code, run the project's tests with run_command (find the test command in package.json, pyproject.toml, Makefile or similar). If they fail, read the error, fix it, and run them again. After three failed attempts, stop and explain what is failing.
+- Keep changes small and focused on what the user asked for.
 - The user may interrupt you mid-task. An interruption overrides the earlier instruction: drop work that no longer fits, re-plan out loud in one sentence, and continue.
 - When finished, give a short spoken summary (one to three sentences). Put any file paths or code after the summary.`;
+
+const KEEP_FULL_TOOL_RESULTS = 6;
+const OLD_RESULT_CHARS = 400;
+
+/**
+ * Free tiers have small per-minute token budgets, so only the latest tool results are sent in
+ * full. Older ones are cut short; the model can re-read a file if it needs it again.
+ */
+export function compactHistory(history: ChatMessage[]): ChatMessage[] {
+  let recent = 0;
+  return history
+    .slice()
+    .reverse()
+    .map((m) => {
+      if (m.role !== 'tool' || !m.content) return m;
+      if (++recent <= KEEP_FULL_TOOL_RESULTS || m.content.length <= OLD_RESULT_CHARS) return m;
+      return { ...m, content: `${m.content.slice(0, OLD_RESULT_CHARS)}\n…(older result shortened)` };
+    })
+    .reverse();
+}
 
 export interface AgentOptions {
   llm: LLM;
@@ -45,6 +70,7 @@ export class Agent extends EventEmitter {
     super();
     this.tools = new Map(opts.tools.map((t) => [t.spec.function.name, t]));
     this.maxSteps = opts.maxSteps ?? 25;
+    opts.llm.onNotice = (text) => this.send({ type: 'notice', text });
   }
 
   get busy(): boolean {
@@ -97,7 +123,7 @@ export class Agent extends EventEmitter {
       for (let step = 0; step < this.maxSteps; step++) {
         let reply;
         try {
-          reply = await this.opts.llm.chat(this.history, [...this.tools.values()].map((t) => t.spec), signal);
+          reply = await this.opts.llm.chat(compactHistory(this.history), [...this.tools.values()].map((t) => t.spec), signal);
         } catch (err) {
           if (signal.aborted) return;
           throw err;
@@ -117,7 +143,7 @@ export class Agent extends EventEmitter {
             this.history.push({ role: 'tool', tool_call_id: call.id, content: 'Skipped: the user interrupted.' });
             continue;
           }
-          this.history.push({ role: 'tool', tool_call_id: call.id, content: await this.runTool(call.function.name, call.function.arguments) });
+          this.history.push({ role: 'tool', tool_call_id: call.id, content: await this.runTool(call.function.name, call.function.arguments, signal) });
         }
         if (signal.aborted) return;
       }
@@ -130,7 +156,7 @@ export class Agent extends EventEmitter {
     }
   }
 
-  private async runTool(name: string, rawArgs: string): Promise<string> {
+  private async runTool(name: string, rawArgs: string, signal: AbortSignal): Promise<string> {
     const tool = this.tools.get(name);
     let args: Record<string, unknown> = {};
     try {
@@ -144,8 +170,13 @@ export class Agent extends EventEmitter {
       return `Error: unknown tool "${name}"`;
     }
     try {
-      const out = await tool.run(args);
-      this.send({ type: 'tool_result', name, ok: true, preview: out.slice(0, 300) });
+      const out = await tool.run(args, {
+        signal,
+        onFileChange: (c) => this.send({ type: 'file_changed', ...c }),
+      });
+      // Keep the head (exit code) and the tail (where test failures land).
+      const preview = out.length > 2000 ? `${out.slice(0, 300)}\n…\n${out.slice(-1700)}` : out;
+      this.send({ type: 'tool_result', name, ok: true, preview });
       return out;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
