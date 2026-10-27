@@ -11,3 +11,5 @@ const child = spawn(process.execPath, ['--import', 'tsx', path.join(root, 'src',
   cwd: root,
 });
 child.on('exit', (code) => process.exit(code ?? 0));
+// Pass Ctrl+C and kills on to the server so it never outlives the launcher.
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));

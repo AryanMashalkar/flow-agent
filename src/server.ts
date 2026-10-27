@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { Agent, type AgentEvent } from './agent.ts';
 import { llmFromEnv } from './llm.ts';
 import { allTools } from './tools.ts';
+import type { Plan } from './plan.ts';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try {
@@ -19,8 +20,9 @@ const port = Number(process.env.PORT) || 4242;
 const llm = llmFromEnv();
 const agent = new Agent({ llm, tools: allTools(workspace) });
 
-const metrics = { wordsDictated: 0, instructions: 0, interruptions: 0, toolCalls: 0, filesChanged: 0, testRuns: 0, startedAt: Date.now() };
+const metrics = { wordsDictated: 0, instructions: 0, interruptions: 0, toolCalls: 0, filesChanged: 0, testRuns: 0, replans: 0, startedAt: Date.now() };
 const changedFiles = new Set<string>();
+let lastPlan: Plan | null = null;
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -57,12 +59,14 @@ agent.on('event', (e: AgentEvent) => {
     metrics.toolCalls++;
     if (e.name === 'run_command') metrics.testRuns++;
   }
+  if (e.type === 'plan' && e.plan.replanned) metrics.replans++;
+  if (e.type === 'plan') lastPlan = e.plan;
   if (e.type === 'file_changed') {
     changedFiles.add(e.path);
     metrics.filesChanged = changedFiles.size;
   }
   broadcast(e);
-  if (e.type === 'tool' || e.type === 'user' || e.type === 'file_changed' || e.type === 'status') {
+  if (e.type === 'tool' || e.type === 'user' || e.type === 'file_changed' || e.type === 'status' || e.type === 'plan') {
     broadcast({ type: 'metrics', model: llm.label, ...metrics });
   }
 });
@@ -70,6 +74,8 @@ agent.on('event', (e: AgentEvent) => {
 wss.on('connection', (ws: WebSocket) => {
   ws.send(JSON.stringify({ type: 'hello', workspace, model: llm.label, running: agent.busy }));
   ws.send(JSON.stringify({ type: 'metrics', model: llm.label, ...metrics }));
+  // A page opened mid-task still sees the current plan, but not as a fresh re-plan.
+  if (lastPlan) ws.send(JSON.stringify({ type: 'plan', plan: { ...lastPlan, replanned: false } }));
   ws.on('message', (raw) => {
     let msg: { type?: string; text?: string };
     try {
