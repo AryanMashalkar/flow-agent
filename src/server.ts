@@ -30,6 +30,8 @@ const agent = new Agent({ llm, tools: allTools(workspace) });
 const metrics = { wordsDictated: 0, instructions: 0, interruptions: 0, toolCalls: 0, filesChanged: 0, testRuns: 0, replans: 0, prsOpened: 0, startedAt: Date.now() };
 const changedFiles = new Set<string>();
 let lastPlan: Plan | null = null;
+/** Identifies this conversation; the browser keeps its history under it. Changes on a new session. */
+let sessionId = Date.now();
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -85,6 +87,18 @@ async function loadTranscript(name: string, text: string): Promise<void> {
   }
 }
 
+async function newSession(): Promise<void> {
+  board.clear();
+  await agent.reset();
+  Object.assign(metrics, { wordsDictated: 0, instructions: 0, interruptions: 0, toolCalls: 0, filesChanged: 0, testRuns: 0, replans: 0, prsOpened: 0, startedAt: Date.now() });
+  changedFiles.clear();
+  lastPlan = null;
+  sessionId = Date.now();
+  broadcast({ type: 'session', session: sessionId });
+  broadcast({ type: 'status', running: false });
+  broadcast({ type: 'metrics', model: llm.label, ...metrics });
+}
+
 agent.on('event', (e: AgentEvent) => {
   if (e.type === 'tool') {
     metrics.toolCalls++;
@@ -104,7 +118,7 @@ agent.on('event', (e: AgentEvent) => {
 });
 
 wss.on('connection', (ws: WebSocket) => {
-  ws.send(JSON.stringify({ type: 'hello', workspace, model: llm.label, running: agent.busy }));
+  ws.send(JSON.stringify({ type: 'hello', workspace, model: llm.label, running: agent.busy, session: sessionId }));
   ws.send(JSON.stringify({ type: 'metrics', model: llm.label, ...metrics }));
   // A page opened mid-task still sees the current plan, but not as a fresh re-plan.
   if (lastPlan) ws.send(JSON.stringify({ type: 'plan', plan: { ...lastPlan, replanned: false } }));
@@ -132,6 +146,8 @@ wss.on('connection', (ws: WebSocket) => {
     } else if (msg.type === 'stop') {
       board.cancel();
       void agent.stop();
+    } else if (msg.type === 'new_session') {
+      void newSession();
     } else if (msg.type === 'transcript' && msg.text?.trim()) {
       void loadTranscript(msg.name?.trim() || 'Meeting', msg.text);
     } else if (msg.type === 'run_task') {

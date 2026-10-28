@@ -3,6 +3,7 @@ const log = $('log');
 const input = $('input');
 
 let ws;
+let isRunning = false;
 let lastMetrics = null;
 // Keys pressed in the command box (dictation excluded): the number a voice-only session keeps at zero.
 let keysTyped = 0;
@@ -77,7 +78,7 @@ if ('speechSynthesis' in window) {
 }
 
 function speak(text) {
-  if (!$('narrate').checked || !('speechSynthesis' in window) || !text) return;
+  if (replaying || !$('narrate').checked || !('speechSynthesis' in window) || !text) return;
   // Speak only the prose, not trailing code or paths.
   const spoken = text.split(/\n\s*\n|```/)[0].replace(/[*_`#]/g, '').slice(0, 400);
   const u = new SpeechSynthesisUtterance(spoken);
@@ -91,6 +92,10 @@ function shush() {
 }
 
 function handle(e) {
+  if (e.type === 'session') return startSession(e.session);
+  if (RECORDED.has(e.type)) record(e);
+  // A live event while a past session is on screen: it's saved, and shown on "Back to live".
+  if (viewing && RECORDED.has(e.type)) return;
   // Any real progress means the model answered, so the busy chip goes away.
   if (['say', 'tool', 'done', 'stopped', 'error', 'plan'].includes(e.type)) $('model-status').hidden = true;
   const working = thinking.isConnected;
@@ -103,6 +108,8 @@ function dispatch(e) {
     case 'hello':
       $('model').textContent = e.model;
       $('workspace').textContent = e.workspace;
+      if (!live || live.serverId !== e.session) startSession(e.session);
+      else if (!log.childElementCount && !viewing) renderSession(live);
       setRunning(e.running);
       break;
     case 'metrics':
@@ -246,6 +253,13 @@ function renderPlan(plan) {
 }
 
 function renderMeeting(m) {
+  // A cleared board (new session) goes back to the hint, not "no action items".
+  if (!m.tasks.length && !m.name) {
+    $('meeting-tasks').innerHTML = EMPTY.meeting;
+    $('meeting-title').textContent = 'Meeting tasks';
+    $('run-all').hidden = true;
+    return;
+  }
   const list = $('meeting-tasks');
   list.replaceChildren();
   $('meeting-title').textContent = m.name ? `Tasks from ${m.name}` : 'Meeting tasks';
@@ -302,7 +316,9 @@ thinking.className = 'ev thinking';
 thinking.textContent = 'Thinking';
 
 function setRunning(running) {
+  isRunning = running;
   $('status-dot').classList.toggle('running', running);
+  if (viewing) return;
   if (running) showThinking();
   else thinking.remove();
 }
@@ -319,6 +335,7 @@ function send() {
   const text = input.value.trim();
   if (!text || ws.readyState !== WebSocket.OPEN) return;
   input.value = '';
+  if (viewing) backToLive();
   shush();
   // A bare spoken "stop" halts the agent; anything longer is a new instruction or a barge-in.
   if (/^(stop|halt|cancel)[.!]?$/i.test(text)) ws.send(JSON.stringify({ type: 'stop' }));
@@ -425,8 +442,8 @@ function drawRecap(canvas, tiles, minutes) {
   const c = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const bg = c.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, '#16132e');
-  bg.addColorStop(1, '#0e0f13');
+  bg.addColorStop(0, '#071a0e');
+  bg.addColorStop(1, '#050607');
   c.fillStyle = bg;
   c.fillRect(0, 0, W, H);
   const font = (size, weight = 400) => `${weight} ${size}px ui-sans-serif, system-ui, "Segoe UI", sans-serif`;
@@ -442,8 +459,8 @@ function drawRecap(canvas, tiles, minutes) {
   tiles.forEach(([label, value], i) => {
     const x = 60 + (i % cols) * (tw + gap), y = 185 + Math.floor(i / cols) * (th + gap);
     const star = label === 'keys typed' ? value === 0 : label === 'barge-ins' && value > 0;
-    c.fillStyle = star ? 'rgba(124, 108, 255, 0.28)' : 'rgba(255, 255, 255, 0.05)';
-    c.strokeStyle = star ? '#7c6cff' : '#262a35';
+    c.fillStyle = star ? 'rgba(34, 224, 107, 0.16)' : 'rgba(255, 255, 255, 0.05)';
+    c.strokeStyle = star ? '#22e06b' : '#262a35';
     c.lineWidth = 2;
     c.beginPath();
     c.roundRect(x, y, tw, th, 16);
@@ -460,4 +477,174 @@ function drawRecap(canvas, tiles, minutes) {
   c.fillStyle = '#8a90a0';
   c.font = font(20);
   c.fillText('github.com/AryanMashalkar/flow-agent  ·  #NoHandsChallenge', 60, H - 40);
+}
+
+// History: every session's conversation is kept in this browser, like a chat history.
+const RECORDED = new Set(['user', 'say', 'tool', 'tool_result', 'file_changed', 'done', 'plan', 'pull_request', 'meeting', 'notice', 'stopped', 'error', 'interrupted']);
+const STORE = 'flow-agent-history-v1';
+const MAX_SESSIONS = 30;
+const MAX_EVENTS = 500;
+const EMPTY = { plan: $('plan-steps').innerHTML, meeting: $('meeting-tasks').innerHTML };
+let sessions = loadSessions();
+let live = null;
+let viewing = null;
+let replaying = false;
+let saveTimer = null;
+
+function loadSessions() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORE) || '[]');
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(STORE, JSON.stringify(sessions));
+    } catch {
+      // Storage full or blocked: drop the oldest sessions and keep going.
+      sessions = sessions.slice(0, Math.max(1, Math.floor(sessions.length / 2)));
+    }
+  }, 300);
+}
+
+// Reopening the page continues the session the server is still running.
+live = sessions[0] ?? null;
+
+function startSession(serverId) {
+  live = { id: `${serverId}-${Math.random().toString(36).slice(2, 7)}`, serverId, started: Date.now(), title: '', events: [] };
+  sessions.unshift(live);
+  sessions = sessions.slice(0, MAX_SESSIONS);
+  viewing = null;
+  $('viewing').hidden = true;
+  clearView();
+  saveSoon();
+  renderSessions();
+}
+
+function record(e) {
+  if (!live || (e.type === 'meeting' && !e.tasks.length && !e.name)) return;
+  const last = live.events.findLast((x) => x.type === e.type);
+  // The server re-sends the current plan and meeting on reconnect; don't store them twice.
+  if ((e.type === 'plan' || e.type === 'meeting') && last && JSON.stringify(last) === JSON.stringify(e)) return;
+  const copy = e.type === 'file_changed' && e.diff.length > 4000 ? { ...e, diff: `${e.diff.slice(0, 4000)}\n…` } : e;
+  live.events.push(copy);
+  if (live.events.length > MAX_EVENTS) live.events.shift();
+  if (e.type === 'user' && !e.interrupt) {
+    live.instructions = (live.instructions ?? 0) + 1;
+    if (!live.title) live.title = e.text;
+    renderSessions();
+  }
+  saveSoon();
+}
+
+function clearView() {
+  log.replaceChildren();
+  newTask();
+  pendingCommand = null;
+  $('plan-steps').innerHTML = EMPTY.plan;
+  $('plan-progress').textContent = '';
+  $('plan-title').textContent = 'Plan';
+  $('meeting-tasks').innerHTML = EMPTY.meeting;
+  $('meeting-title').textContent = 'Meeting tasks';
+  $('run-all').hidden = true;
+}
+
+function renderSession(s) {
+  replaying = true;
+  clearView();
+  for (const e of s.events) dispatch(e);
+  replaying = false;
+  thinking.remove();
+  log.scrollTop = log.scrollHeight;
+}
+
+function viewSession(s) {
+  if (s === live) return backToLive();
+  viewing = s;
+  $('viewing').hidden = false;
+  renderSession(s);
+  renderSessions();
+  document.body.classList.remove('show-history');
+}
+
+function backToLive() {
+  viewing = null;
+  $('viewing').hidden = true;
+  if (live) renderSession(live);
+  setRunning(isRunning);
+  renderSessions();
+}
+
+function renderSessions() {
+  const list = $('sessions');
+  list.replaceChildren();
+  const day = (t) => new Date(t).toDateString();
+  const today = day(Date.now());
+  const yesterday = day(Date.now() - 86_400_000);
+  let group = '';
+  for (const s of sessions) {
+    const g = day(s.started) === today ? 'Today' : day(s.started) === yesterday ? 'Yesterday' : 'Earlier';
+    if (g !== group) {
+      group = g;
+      const li = document.createElement('li');
+      li.className = 'group';
+      li.textContent = g;
+      list.appendChild(li);
+    }
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.className = `session${s === (viewing ?? live) ? ' active' : ''}`;
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = s.title || 'New session';
+    title.title = s.title || '';
+    const when = document.createElement('span');
+    when.className = 'when';
+    const n = s.instructions ?? 0;
+    when.textContent = `${new Date(s.started).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${n} instruction${n === 1 ? '' : 's'}`;
+    if (s === live) {
+      const tag = document.createElement('span');
+      tag.className = 'live';
+      tag.textContent = ' · LIVE';
+      when.appendChild(tag);
+    }
+    btn.append(title, when);
+    btn.onclick = () => viewSession(s);
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+  if (!sessions.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'Your sessions show up here.';
+    list.appendChild(li);
+  }
+}
+
+$('new-session').onclick = () => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'new_session' }));
+$('back-live').onclick = backToLive;
+$('clear-history').onclick = () => {
+  sessions = live ? [live] : [];
+  if (viewing) backToLive();
+  saveSoon();
+  renderSessions();
+};
+$('toggle-history').onclick = () => {
+  if (window.matchMedia('(max-width: 1180px)').matches) document.body.classList.toggle('show-history');
+  else document.body.classList.toggle('no-history');
+};
+renderSessions();
+
+// The welcome screen shows until the conversation has something in it.
+new MutationObserver(() => ($('welcome').hidden = log.childElementCount > 0)).observe(log, { childList: true });
+for (const b of document.querySelectorAll('button.example')) {
+  b.onclick = () => {
+    input.value = b.textContent;
+    send();
+  };
 }

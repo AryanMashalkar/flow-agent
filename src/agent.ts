@@ -144,6 +144,16 @@ export class Agent extends EventEmitter {
     this.send({ type: 'stopped' });
   }
 
+  /** Start a fresh session: stop any task and forget the conversation and plan. */
+  async reset(): Promise<void> {
+    this.generation++;
+    this.controller?.abort();
+    await this.running;
+    this.history.length = 1;
+    this.plan = null;
+    this.replanReason = null;
+  }
+
   private async loop(): Promise<void> {
     const controller = new AbortController();
     this.controller = controller;

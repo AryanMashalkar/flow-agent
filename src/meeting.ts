@@ -131,6 +131,14 @@ export class MeetingBoard {
     this.cancelled = true;
   }
 
+  /** Forget the meeting entirely, for a new session. */
+  clear(): void {
+    this.cancel();
+    this.tasks = [];
+    this.name = '';
+    this.onUpdate(this);
+  }
+
   private async drain(): Promise<void> {
     this.draining = true;
     try {

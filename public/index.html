@@ -4,37 +4,70 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Flow Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <div class="brand"><span class="dot" id="status-dot"></span> Flow Agent</div>
-    <div class="meta"><span id="model-status" hidden></span><span id="model">connecting…</span> · <span id="workspace"></span></div>
+  <header class="topbar">
+    <div class="brand">
+      <button id="toggle-history" class="icon" title="History" aria-label="Show history">☰</button>
+      <span class="logo" aria-hidden="true">&lt;<b>&gt;</b></span>
+      <span class="name">FLOW AGENT</span>
+      <span class="dot" id="status-dot" title="Idle"></span>
+    </div>
+    <div class="meta"><span id="model-status" hidden></span><span id="model">connecting…</span><span class="sep">/</span><span id="workspace"></span></div>
   </header>
 
   <section class="metrics">
-    <div><b id="m-words">0</b><span>words dictated</span></div>
-    <div><b id="m-instr">0</b><span>instructions</span></div>
-    <div><b id="m-interrupts">0</b><span>barge-ins</span></div>
-    <div><b id="m-files">0</b><span>files changed</span></div>
-    <div><b id="m-tests">0</b><span>commands run</span></div>
-    <div><b id="m-replans">0</b><span>re-plans</span></div>
-    <div><b id="m-prs">0</b><span>PRs opened</span></div>
-    <div><b id="m-keys">0</b><span>keys typed</span></div>
+    <div><span>Words dictated</span><b id="m-words">0</b></div>
+    <div><span>Instructions</span><b id="m-instr">0</b></div>
+    <div class="hot"><span>Barge-ins</span><b id="m-interrupts">0</b></div>
+    <div><span>Files changed</span><b id="m-files">0</b></div>
+    <div><span>Commands run</span><b id="m-tests">0</b></div>
+    <div class="hot"><span>Re-plans</span><b id="m-replans">0</b></div>
+    <div><span>PRs opened</span><b id="m-prs">0</b></div>
+    <div class="keys"><span>Keys typed</span><b id="m-keys">0</b></div>
   </section>
 
   <div class="work">
-    <main id="log" aria-live="polite"></main>
+    <aside id="history">
+      <div class="side-head">
+        <span class="label">History</span>
+        <button id="new-session" class="secondary small">+ New</button>
+      </div>
+      <ol id="sessions"></ol>
+      <button id="clear-history" class="link">Clear history</button>
+    </aside>
+
+    <main>
+      <div id="viewing" hidden>
+        <span>Viewing a past session (read only)</span>
+        <button id="back-live" class="secondary small">Back to live</button>
+      </div>
+      <div id="log" aria-live="polite"></div>
+      <section id="welcome">
+        <p class="label">Hacker home</p>
+        <h1>Talk. It codes.<br />Talk over it. It re-plans.</h1>
+        <p class="sub">Hold your Wispr Flow key and say what you want built. Change your mind mid-task by just speaking again.</p>
+        <div class="examples">
+          <button class="example">Add a due date to todos and sort them soonest first.</button>
+          <button class="example">Fix the crash when the password is empty, and add a test.</button>
+          <button class="example">What does this project do?</button>
+        </div>
+      </section>
+    </main>
+
     <aside id="plan">
       <div class="plan-head">
-        <span id="plan-title">Plan</span>
+        <span id="plan-title" class="label">Plan</span>
         <span id="plan-progress"></span>
       </div>
       <div id="plan-banner" hidden></div>
       <ol id="plan-steps"><li class="empty">Say what you want built. The plan shows up here.</li></ol>
 
       <div class="plan-head meeting-head">
-        <span id="meeting-title">Meeting tasks</span>
+        <span id="meeting-title" class="label">Meeting tasks</span>
         <button id="run-all" class="secondary small" hidden>Run all code tasks</button>
       </div>
       <ol id="meeting-tasks"><li class="empty">Drop a meeting transcript anywhere on the page, or use the Meeting button. Then say "do task 1".</li></ol>
