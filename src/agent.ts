@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { ChatMessage, LLM } from './llm.ts';
 import type { FileChange, Tool } from './tools.ts';
+import { describePlan, parseSteps, PLAN_TOOL, type Plan } from './plan.ts';
 
 export type AgentEvent =
   | { type: 'user'; text: string; interrupt: boolean }
@@ -13,17 +14,20 @@ export type AgentEvent =
   | { type: 'done'; text: string }
   | { type: 'error'; message: string }
   | { type: 'status'; running: boolean }
-  | { type: 'notice'; text: string };
+  | { type: 'notice'; text: string }
+  | { type: 'plan'; plan: Plan };
 
 const SYSTEM_PROMPT = `You are Flow Agent, a voice-native coding agent. The user talks to you by voice and hears your replies read aloud.
 
 Rules:
+- Start every task by calling update_plan with a short checklist (two to seven steps). Mark one step active at a time, and call update_plan again as steps finish.
 - Before every tool call, write ONE short spoken sentence (under 15 words) saying what you are about to do. No markdown, no code in that sentence.
 - Be autonomous: explore the workspace with your tools instead of asking questions you could answer yourself.
+- Be quick: every model call is slow and rate limited. Call several tools in one turn when they don't depend on each other (for example update_plan plus reading two files). Explore only what the task needs.
 - To change code, read the file first, then use edit_file with a snippet copied exactly from it. Use write_file only for new files.
 - After changing code, run the project's tests with run_command (find the test command in package.json, pyproject.toml, Makefile or similar). If they fail, read the error, fix it, and run them again. After three failed attempts, stop and explain what is failing.
 - Keep changes small and focused on what the user asked for.
-- The user may interrupt you mid-task. An interruption overrides the earlier instruction: drop work that no longer fits, re-plan out loud in one sentence, and continue.
+- The user may interrupt you mid-task. An interruption overrides the earlier instruction. First call update_plan: keep finished steps as done, mark steps that no longer fit as dropped, and add the new steps. Say the change in one sentence, then continue.
 - When finished, give a short spoken summary (one to three sentences). Put any file paths or code after the summary.`;
 
 const KEEP_FULL_TOOL_RESULTS = 6;
@@ -65,6 +69,9 @@ export class Agent extends EventEmitter {
   private queued = 0;
   private readonly tools: Map<string, Tool>;
   private readonly maxSteps: number;
+  private plan: Plan | null = null;
+  /** Set when the user barges in, so the next plan update is shown as a re-plan. */
+  private replanReason: string | null = null;
 
   constructor(private opts: AgentOptions) {
     super();
@@ -93,15 +100,24 @@ export class Agent extends EventEmitter {
     this.queued++;
     this.running = this.running.then(() => {
       this.queued--;
-      this.history.push({
-        role: 'user',
-        content: interrupt ? `[The user interrupted you mid-task] ${text}\nAdjust your plan to this and continue.` : text,
-      });
+      this.replanReason = interrupt ? text : null;
+      this.history.push({ role: 'user', content: interrupt ? this.interruption(text) : `${text}\n\n(Start with update_plan.)` });
       // A newer instruction is already queued behind this one: record this one and let that run.
       if (gen !== this.generation) return;
       return this.loop();
     });
     return this.running;
+  }
+
+  private interruption(text: string): string {
+    const plan = describePlan(this.plan);
+    return [
+      `[The user interrupted you mid-task] ${text}`,
+      plan && `Your plan before the interruption:\n${plan}`,
+      'Call update_plan first to re-plan around this, then continue.',
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
 
   /** Stop the current task without giving a new instruction. */
@@ -110,6 +126,7 @@ export class Agent extends EventEmitter {
     this.generation++;
     this.controller?.abort();
     await this.running;
+    this.replanReason = null;
     this.history.push({ role: 'user', content: '[The user said stop. Wait for the next instruction.]' });
     this.send({ type: 'stopped' });
   }
@@ -123,7 +140,7 @@ export class Agent extends EventEmitter {
       for (let step = 0; step < this.maxSteps; step++) {
         let reply;
         try {
-          reply = await this.opts.llm.chat(compactHistory(this.history), [...this.tools.values()].map((t) => t.spec), signal);
+          reply = await this.opts.llm.chat(compactHistory(this.history), [PLAN_TOOL, ...[...this.tools.values()].map((t) => t.spec)], signal);
         } catch (err) {
           if (signal.aborted) return;
           throw err;
@@ -132,6 +149,7 @@ export class Agent extends EventEmitter {
         this.history.push({ role: 'assistant', content: reply.content, tool_calls: reply.tool_calls });
 
         if (!reply.tool_calls) {
+          this.finishPlan();
           this.send({ type: 'done', text: reply.content ?? '' });
           return;
         }
@@ -156,6 +174,33 @@ export class Agent extends EventEmitter {
     }
   }
 
+  /** The task is finished, so the step the agent was on is finished too. */
+  private finishPlan(): void {
+    if (!this.plan?.steps.some((s) => s.status === 'active')) return;
+    const steps = this.plan.steps.map((s) => (s.status === 'active' ? { ...s, status: 'done' as const } : s));
+    this.plan = { ...this.plan, version: this.plan.version + 1, steps, replanned: false };
+    delete this.plan.reason;
+    this.send({ type: 'plan', plan: this.plan });
+  }
+
+  private updatePlan(args: Record<string, unknown>): string {
+    let steps;
+    try {
+      steps = parseSteps(args);
+    } catch (err) {
+      return `Error: ${(err as Error).message}`;
+    }
+    this.plan = {
+      version: (this.plan?.version ?? 0) + 1,
+      steps,
+      replanned: this.replanReason !== null,
+      ...(this.replanReason !== null ? { reason: this.replanReason } : {}),
+    };
+    this.replanReason = null;
+    this.send({ type: 'plan', plan: this.plan });
+    return 'Plan shown to the user.';
+  }
+
   private async runTool(name: string, rawArgs: string, signal: AbortSignal): Promise<string> {
     const tool = this.tools.get(name);
     let args: Record<string, unknown> = {};
@@ -164,6 +209,7 @@ export class Agent extends EventEmitter {
     } catch {
       return `Error: arguments were not valid JSON: ${rawArgs}`;
     }
+    if (name === PLAN_TOOL.function.name) return this.updatePlan(args);
     this.send({ type: 'tool', name, args });
     if (!tool) {
       this.send({ type: 'tool_result', name, ok: false, preview: 'unknown tool' });

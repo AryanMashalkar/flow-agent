@@ -75,6 +75,7 @@ function dispatch(e) {
       $('m-interrupts').textContent = e.interruptions;
       $('m-files').textContent = e.filesChanged;
       $('m-tests').textContent = e.testRuns;
+      $('m-replans').textContent = e.replans ?? 0;
       if (e.model) $('model').textContent = e.model;
       break;
     case 'status':
@@ -82,6 +83,8 @@ function dispatch(e) {
       break;
     case 'user':
       add(e.interrupt ? 'user interrupt' : 'user', e.text);
+      // A fresh instruction starts a new task, so the re-plan banner belongs to the old one.
+      if (!e.interrupt) newTask();
       break;
     case 'interrupted':
       add('notice', 'Cancelling the current step and re-planning…');
@@ -119,6 +122,9 @@ function dispatch(e) {
       add('done', e.text);
       speak(e.text);
       break;
+    case 'plan':
+      renderPlan(e.plan);
+      break;
     case 'notice':
       add('notice', e.text);
       break;
@@ -129,6 +135,65 @@ function dispatch(e) {
       add('error', e.message);
       break;
   }
+}
+
+let currentPlan = null;
+// Steps dropped by a re-plan stay visible, struck through, until the next task starts.
+let ghosts = [];
+const norm = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+function stepItem(step, extra = '') {
+  const li = document.createElement('li');
+  li.className = `${step.status} ${extra}`.trim();
+  li.textContent = step.text;
+  return li;
+}
+
+function renderPlan(plan) {
+  const prev = currentPlan;
+  currentPlan = plan;
+  const replan = plan.replanned && prev;
+  const before = new Set((prev?.steps ?? []).map((s) => norm(s.text)));
+  const now = new Set(plan.steps.map((s) => norm(s.text)));
+  let added = 0;
+  if (replan) {
+    for (const old of prev.steps) {
+      if (!now.has(norm(old.text)) && old.status !== 'done' && !ghosts.some((g) => norm(g) === norm(old.text))) ghosts.push(old.text);
+    }
+  }
+  const list = $('plan-steps');
+  list.replaceChildren();
+  for (const step of plan.steps) {
+    const isNew = replan && !before.has(norm(step.text));
+    if (isNew) added++;
+    list.appendChild(stepItem(step, isNew ? 'new' : ''));
+  }
+  for (const text of ghosts) {
+    if (!now.has(norm(text))) list.appendChild(stepItem({ text, status: 'dropped' }));
+  }
+  const live = plan.steps.filter((s) => s.status !== 'dropped');
+  $('plan-progress').textContent = `${live.filter((s) => s.status === 'done').length}/${live.length} done`;
+  $('plan-title').textContent = plan.version > 1 ? `Plan v${plan.version}` : 'Plan';
+  if (plan.replanned) {
+    const banner = $('plan-banner');
+    banner.hidden = false;
+    banner.textContent = `⚡ Re-planned after “${plan.reason}”`;
+    // Restart the flash animation.
+    banner.style.animation = 'none';
+    void banner.offsetWidth;
+    banner.style.animation = '';
+    if (replan) {
+      const dropped = plan.steps.filter((s) => s.status === 'dropped' && before.has(norm(s.text))).length +
+        prev.steps.filter((s) => !now.has(norm(s.text)) && s.status !== 'done').length;
+      add('notice', `Re-planned: ${dropped} step${dropped === 1 ? '' : 's'} dropped, ${added} added.`);
+    }
+  }
+}
+
+function newTask() {
+  $('plan-banner').hidden = true;
+  ghosts = [];
+  currentPlan = null;
 }
 
 const thinking = document.createElement('div');

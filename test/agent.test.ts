@@ -4,9 +4,10 @@ import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent, compactHistory, type AgentEvent } from '../src/agent.ts';
+import type { Plan } from '../src/plan.ts';
 import type { ChatMessage, ChatResult, LLM } from '../src/llm.ts';
 import { allTools, readOnlyTools, resolveInside, type FileChange, type ToolContext } from '../src/tools.ts';
-import { OpenAICompatibleLLM, pickModel, rankModels, stripThoughts } from '../src/llm.ts';
+import { OpenAICompatibleLLM, pickModel, rankModels, retryAfterSeconds, stripThoughts } from '../src/llm.ts';
 import http from 'node:http';
 
 /** A fake model that replays scripted replies, optionally waiting until aborted. */
@@ -218,7 +219,14 @@ async function fakeProvider(statuses: number[], models: string[] = []) {
   });
   await new Promise<void>((r) => server.listen(0, r));
   const port = (server.address() as { port: number }).port;
-  return { url: `http://localhost:${port}`, seen, close: () => server.close() };
+  return {
+    url: `http://localhost:${port}`,
+    seen,
+    close: () => {
+      server.closeAllConnections();
+      server.close();
+    },
+  };
 }
 
 test('retries a busy model, then succeeds', async () => {
@@ -324,4 +332,70 @@ test('a malformed tool call from the provider is retried', async () => {
   const llm = new OpenAICompatibleLLM(url, 'main', 'k', false, [], [1]);
   assert.equal((await llm.chat([], [], new AbortController().signal)).content, 'ok');
   server.close();
+});
+
+test('update_plan is shown to the user and a barge-in marks the next plan as a re-plan', async () => {
+  const plan1 = { steps: [{ text: 'Add SQLite', status: 'active' }, { text: 'Create users table', status: 'pending' }] };
+  const plan2 = { steps: [{ text: 'Add SQLite', status: 'dropped' }, { text: 'Add Postgres', status: 'active' }, { text: 'Create users table', status: 'pending' }] };
+  const llm = new ScriptedLLM([
+    { content: 'Planning.', tool_calls: [call('p1', 'update_plan', plan1)] },
+    'hang',
+    { content: 'Switching to Postgres.', tool_calls: [call('p2', 'update_plan', plan2)] },
+    { content: 'Done.' },
+  ]);
+  const agent = new Agent({ llm, tools: [] });
+  const plans: Plan[] = [];
+  agent.on('event', (e: AgentEvent) => e.type === 'plan' && plans.push(e.plan));
+
+  const first = agent.submit('add a users table with sqlite');
+  while (llm.calls.length < 2) await new Promise((r) => setImmediate(r));
+  await agent.submit('stop, use Postgres not SQLite');
+  await first;
+
+  // v3 is the finished task: the step the agent was on is marked done.
+  assert.deepEqual(plans.map((p) => [p.version, p.replanned]), [[1, false], [2, true], [3, false]]);
+  assert.deepEqual(plans[2].steps.map((s) => s.status), ['dropped', 'done', 'pending']);
+  assert.equal(plans[1].reason, 'stop, use Postgres not SQLite');
+  // The interruption reminds the model of the plan it had.
+  const interruption = llm.calls[2].at(-1)!.content!;
+  assert.match(interruption, /1\. \[active\] Add SQLite/);
+  assert.match(interruption, /Call update_plan first/);
+  // The plan tool is offered to the model.
+  assertPaired(agent.history);
+});
+
+test('a bad plan is reported back to the model instead of crashing', async () => {
+  const llm = new ScriptedLLM([
+    { content: 'Planning.', tool_calls: [call('p1', 'update_plan', { steps: [] })] },
+    { content: 'Done.' },
+  ]);
+  const agent = new Agent({ llm, tools: [] });
+  await agent.submit('do it');
+  assert.match(agent.history.find((m) => m.tool_call_id === 'p1')!.content!, /non-empty list/);
+});
+
+test('a rate limit goes to a backup model at once instead of burning retries', async () => {
+  const p = await fakeProvider([429, 200], ['gemini-3.8-flash', 'gemini-3.6-flash']);
+  const llm = new OpenAICompatibleLLM(p.url, 'gemini-3.8-flash', 'k', false, [], [1, 1, 1]);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from gemini-3.6-flash');
+  assert.deepEqual(p.seen, ['gemini-3.8-flash', 'gemini-3.6-flash']);
+  p.close();
+});
+
+test('a rate limit with no backup waits, then tries once more', async () => {
+  const p = await fakeProvider([429, 200], ['only-model']);
+  const llm = new OpenAICompatibleLLM(p.url, 'only-model', 'k', false, ['only-model'], [1], 60_000, 45_000, 0);
+  const notices: string[] = [];
+  llm.onNotice = (t) => notices.push(t);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from only-model');
+  assert.ok(notices.some((n) => /Free-tier limit reached/.test(n)));
+  p.close();
+});
+
+test('retryAfterSeconds reads headers and Gemini retryDelay', () => {
+  assert.equal(retryAfterSeconds(new Headers({ 'retry-after': '7' }), ''), 7);
+  assert.equal(retryAfterSeconds(new Headers(), '[{"error":{"details":[{"retryDelay": "23.4s"}]}}]'), 24);
+  assert.equal(retryAfterSeconds(new Headers(), 'nothing'), undefined);
 });

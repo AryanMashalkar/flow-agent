@@ -18,9 +18,20 @@
     <div><b id="m-interrupts">0</b><span>barge-ins</span></div>
     <div><b id="m-files">0</b><span>files changed</span></div>
     <div><b id="m-tests">0</b><span>commands run</span></div>
+    <div><b id="m-replans">0</b><span>re-plans</span></div>
   </section>
 
-  <main id="log" aria-live="polite"></main>
+  <div class="work">
+    <main id="log" aria-live="polite"></main>
+    <aside id="plan">
+      <div class="plan-head">
+        <span id="plan-title">Plan</span>
+        <span id="plan-progress"></span>
+      </div>
+      <div id="plan-banner" hidden></div>
+      <ol id="plan-steps"><li class="empty">Say what you want built. The plan shows up here.</li></ol>
+    </aside>
+  </div>
 
   <footer>
     <textarea id="input" rows="2" placeholder="Hold your Wispr Flow key and speak. Talk over the agent any time to interrupt it."></textarea>

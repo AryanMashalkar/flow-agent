@@ -25,12 +25,13 @@ header {
 .dot.running { background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: pulse 1.4s infinite; }
 @keyframes pulse { 70% { box-shadow: 0 0 0 10px transparent; } }
 
-.metrics { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); }
+.metrics { display: grid; grid-template-columns: repeat(6, 1fr); border-bottom: 1px solid var(--line); }
 .metrics div { padding: 10px 20px; display: flex; flex-direction: column; }
 .metrics b { font-size: 22px; font-variant-numeric: tabular-nums; }
 .metrics span { color: var(--muted); font-size: 12px; }
 
-main { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; }
+.work { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 340px; }
+main { min-height: 0; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; }
 .ev { max-width: 900px; padding: 10px 14px; border-radius: 10px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .ev.user { align-self: flex-end; background: var(--accent); color: white; }
 .ev.user.interrupt { background: var(--warn); color: #1b1300; }
@@ -53,6 +54,26 @@ details.ev pre { margin: 8px 0 0; font-family: ui-monospace, Consolas, monospace
 @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
 .ev.error { color: var(--err); border: 1px solid var(--err); }
 
+#plan { border-left: 1px solid var(--line); padding: 16px 18px; overflow-y: auto; background: var(--panel); }
+.plan-head { display: flex; justify-content: space-between; align-items: baseline; font-weight: 700; margin-bottom: 10px; }
+#plan-progress { color: var(--muted); font-weight: 400; font-size: 13px; }
+#plan-banner { background: var(--warn); color: #1b1300; border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; animation: flash 0.9s ease-out; }
+#plan-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+#plan-steps li { display: flex; gap: 10px; align-items: flex-start; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); line-height: 1.35; font-size: 14px; transition: background 0.3s; }
+#plan-steps li::before { width: 16px; flex: none; text-align: center; color: var(--muted); }
+#plan-steps li.pending::before { content: "○"; }
+#plan-steps li.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+#plan-steps li.active::before { content: "◐"; color: var(--accent); animation: spin 1.2s linear infinite; }
+#plan-steps li.done { color: var(--muted); }
+#plan-steps li.done::before { content: "✓"; color: var(--ok); }
+#plan-steps li.dropped { color: var(--err); text-decoration: line-through; opacity: 0.7; }
+#plan-steps li.dropped::before { content: "✗"; color: var(--err); }
+#plan-steps li.new { animation: flash 1.2s ease-out; }
+#plan-steps li.new::after { content: "new"; margin-left: auto; font-size: 11px; color: var(--warn); }
+#plan-steps li.empty { color: var(--muted); border-style: dashed; }
+@keyframes flash { from { background: color-mix(in srgb, var(--warn) 45%, transparent); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 footer { border-top: 1px solid var(--line); padding: 14px 20px; background: var(--panel); }
 textarea {
   width: 100%; resize: none; font: inherit; font-size: 17px; color: var(--text);
@@ -64,7 +85,9 @@ textarea:focus { outline: 2px solid var(--accent); border-color: transparent; }
 button { font: inherit; border: 0; border-radius: 8px; padding: 8px 18px; cursor: pointer; background: var(--accent); color: white; }
 button.secondary { background: transparent; border: 1px solid var(--line); color: var(--text); }
 
-@media (max-width: 640px) {
+@media (max-width: 860px) {
   .metrics { grid-template-columns: repeat(3, 1fr); }
+  .work { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  #plan { border-left: 0; border-bottom: 1px solid var(--line); max-height: 35vh; order: -1; }
   header { flex-direction: column; align-items: flex-start; }
 }
