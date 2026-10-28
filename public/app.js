@@ -30,6 +30,20 @@ function add(cls, text) {
   return el;
 }
 
+// Models write a little markdown (**bold**, `code`). Show it as formatting, built from DOM nodes, never innerHTML.
+function addRich(cls, text) {
+  const el = add(cls, '');
+  for (const part of text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/)) {
+    if (!part) continue;
+    const bold = /^\*\*(.+)\*\*$/.exec(part);
+    const code = /^`(.+)`$/.exec(part);
+    const node = bold ? document.createElement('strong') : code ? document.createElement('code') : document.createTextNode(part);
+    if (bold || code) node.textContent = (bold ?? code)[1];
+    el.appendChild(node);
+  }
+  return el;
+}
+
 let pendingCommand = null;
 
 function addDetails(title, status, open = false) {
@@ -65,7 +79,7 @@ if ('speechSynthesis' in window) {
 function speak(text) {
   if (!$('narrate').checked || !('speechSynthesis' in window) || !text) return;
   // Speak only the prose, not trailing code or paths.
-  const spoken = text.split(/\n\s*\n|```/)[0].slice(0, 400);
+  const spoken = text.split(/\n\s*\n|```/)[0].replace(/[*_`#]/g, '').slice(0, 400);
   const u = new SpeechSynthesisUtterance(spoken);
   if (voice) u.voice = voice;
   u.rate = 1.05;
@@ -114,7 +128,7 @@ function dispatch(e) {
       add('notice', 'Cancelling the current step and re-planning…');
       break;
     case 'say':
-      add('say', e.text);
+      addRich('say', e.text);
       speak(e.text);
       break;
     case 'tool':
@@ -143,7 +157,7 @@ function dispatch(e) {
       break;
     }
     case 'done':
-      add('done', e.text);
+      addRich('done', e.text);
       speak(e.text);
       break;
     case 'plan':
