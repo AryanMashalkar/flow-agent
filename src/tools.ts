@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { ToolSpec } from './llm.ts';
+import { gitTools } from './git.ts';
 
 const IGNORED = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.venv']);
 const MAX_READ = 20_000;
@@ -21,6 +22,15 @@ export interface ToolContext {
   signal: AbortSignal;
   /** Tools call this after changing a file so the UI can show the diff. */
   onFileChange(change: FileChange): void;
+  /** Git tools call this when a pull request is opened, or its page is ready to open. */
+  onPullRequest?(pr: PullRequestInfo): void;
+}
+
+export interface PullRequestInfo {
+  url: string;
+  title: string;
+  /** False when only the "compare" page could be prepared (no token or gh CLI). */
+  created: boolean;
 }
 
 function tool(
@@ -145,6 +155,8 @@ const BLOCKED_COMMANDS = [
   /\bdel\s+\/[sq]/i,
   /\brd\s+\/s/i,
   /\bgit\s+push\b.*(--force|-f\b)/i,
+  // Pushes go through open_pull_request, which never pushes the default branch.
+  /\bgit\s+push\b/i,
   /\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f)/i,
 ];
 
@@ -253,6 +265,9 @@ export function writeTools(root: string): Tool[] {
       async (args, ctx) => {
         const command = String(args.command ?? '').trim();
         if (!command) throw new Error('command is empty');
+        if (/\bgit\s+push\b/i.test(command) && !/(--force|-f\b)/.test(command)) {
+          throw new Error('Push with open_pull_request instead; it pushes your branch and opens the pull request.');
+        }
         if (BLOCKED_COMMANDS.some((re) => re.test(command))) throw new Error(`Refusing to run a destructive command: ${command}`);
         const { code, output } = await runShell(root, command, ctx.signal);
         if (ctx.signal.aborted) return 'Command cancelled: the user interrupted.';
@@ -264,5 +279,5 @@ export function writeTools(root: string): Tool[] {
 }
 
 export function allTools(root: string): Tool[] {
-  return [...readOnlyTools(root), ...writeTools(root)];
+  return [...readOnlyTools(root), ...writeTools(root), ...gitTools(root)];
 }

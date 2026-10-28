@@ -1,0 +1,15 @@
+Standup — Tuesday, todo-app team
+Attendees: Priya, Arjun, Meera
+
+Priya: Quick one today. The big thing from the client call is they want due dates on todos.
+Arjun: I can take that. Just a dueDate field on the todo and show overdue ones first?
+Priya: Yes. Overdue first, then the rest by created time.
+Meera: Also the login page still crashes when the password is empty. Someone reported it again.
+Arjun: That's a one-line check, I'll add a test for it too.
+Priya: Great. And at first we said store todos in SQLite, but the client's already on Postgres, so let's go with Postgres.
+Meera: Agreed, Postgres.
+Priya: Meera, can you email the client the new timeline by Friday?
+Meera: Sure, I'll send it Thursday.
+Priya: Last thing, the README still says npm start runs on port 3000, it's 8080 now. Can someone fix that?
+Arjun: I'll do it with the due dates PR.
+Priya: Perfect, thanks all.

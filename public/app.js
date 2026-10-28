@@ -76,6 +76,7 @@ function dispatch(e) {
       $('m-files').textContent = e.filesChanged;
       $('m-tests').textContent = e.testRuns;
       $('m-replans').textContent = e.replans ?? 0;
+      $('m-prs').textContent = e.prsOpened ?? 0;
       if (e.model) $('model').textContent = e.model;
       break;
     case 'status':
@@ -124,6 +125,19 @@ function dispatch(e) {
       break;
     case 'plan':
       renderPlan(e.plan);
+      break;
+    case 'pull_request': {
+      const el = add('pr', e.created ? '🚀 Pull request opened: ' : '🚀 Branch pushed. Open the pull request: ');
+      const a = document.createElement('a');
+      a.href = e.url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = e.title;
+      el.appendChild(a);
+      break;
+    }
+    case 'meeting':
+      renderMeeting(e);
       break;
     case 'notice':
       add('notice', e.text);
@@ -190,6 +204,52 @@ function renderPlan(plan) {
   }
 }
 
+function renderMeeting(m) {
+  const list = $('meeting-tasks');
+  list.replaceChildren();
+  $('meeting-title').textContent = m.name ? `Tasks from ${m.name}` : 'Meeting tasks';
+  $('run-all').hidden = !m.tasks.some((t) => t.kind === 'code' && t.status === 'todo');
+  if (!m.tasks.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'No action items found in that meeting.';
+    list.appendChild(li);
+    return;
+  }
+  for (const t of m.tasks) {
+    const li = document.createElement('li');
+    li.className = `${t.kind} ${t.status}`;
+    li.title = t.detail;
+    const num = document.createElement('span');
+    num.className = 'num';
+    num.textContent = t.id;
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = t.title;
+    const action = document.createElement('span');
+    if (t.kind === 'code' && t.status === 'todo') {
+      const btn = document.createElement('button');
+      btn.className = 'secondary small';
+      btn.textContent = 'Run';
+      btn.onclick = () => ws.send(JSON.stringify({ type: 'run_task', id: t.id }));
+      action.appendChild(btn);
+    } else {
+      action.className = 'badge';
+      action.textContent = t.status === 'running' ? 'running' : t.status === 'done' ? 'done' : 'not code';
+    }
+    const meta = document.createElement('span');
+    meta.className = 'tmeta';
+    meta.textContent = [t.owner, t.kind === 'code' ? 'code' : 'for people'].filter(Boolean).join(' · ');
+    li.append(num, title, action, meta);
+    list.appendChild(li);
+  }
+}
+
+function sendTranscript(name, text) {
+  if (!text.trim() || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'transcript', name, text }));
+}
+
 function newTask() {
   $('plan-banner').hidden = true;
   ghosts = [];
@@ -248,3 +308,38 @@ $('stop').onclick = () => {
 
 connect();
 input.focus();
+
+// Meeting transcripts: the Meeting button, or drop a file anywhere.
+$('meeting').onclick = () => $('meeting-dialog').showModal();
+$('run-all').onclick = () => ws.send(JSON.stringify({ type: 'run_task', all: true }));
+$('meeting-file').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  $('meeting-text').value = await file.text();
+  if (!$('meeting-name').value) $('meeting-name').value = file.name.replace(/\.[^.]+$/, '');
+};
+$('meeting-dialog').addEventListener('close', () => {
+  if ($('meeting-dialog').returnValue === 'ok') sendTranscript($('meeting-name').value.trim(), $('meeting-text').value);
+  $('meeting-text').value = '';
+  $('meeting-name').value = '';
+  $('meeting-file').value = '';
+  input.focus();
+});
+
+let dragDepth = 0;
+window.addEventListener('dragenter', (e) => {
+  if (![...e.dataTransfer.types].includes('Files')) return;
+  dragDepth++;
+  $('drop-hint').hidden = false;
+});
+window.addEventListener('dragleave', () => {
+  if (--dragDepth <= 0) $('drop-hint').hidden = true;
+});
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  $('drop-hint').hidden = true;
+  const file = e.dataTransfer.files[0];
+  if (file) sendTranscript(file.name.replace(/\.[^.]+$/, ''), await file.text());
+});

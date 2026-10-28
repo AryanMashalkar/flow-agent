@@ -156,7 +156,8 @@ export class OpenAICompatibleLLM implements LLM {
         method: 'POST',
         signal: AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]),
         headers: this.headers,
-        body: JSON.stringify({ model, messages, tools, tool_choice: 'auto' }),
+        // Providers reject tool_choice without tools, so plain completions send neither.
+        body: JSON.stringify(tools.length ? { model, messages, tools, tool_choice: 'auto' } : { model, messages }),
       });
       if (res.status !== 400) return res;
       // Groq rejects a reply when the model writes a malformed tool call; a retry usually gets a good one.

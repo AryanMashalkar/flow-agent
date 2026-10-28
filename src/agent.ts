@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { ChatMessage, LLM } from './llm.ts';
-import type { FileChange, Tool } from './tools.ts';
+import type { FileChange, PullRequestInfo, Tool } from './tools.ts';
 import { describePlan, parseSteps, PLAN_TOOL, type Plan } from './plan.ts';
 
 export type AgentEvent =
@@ -15,7 +15,8 @@ export type AgentEvent =
   | { type: 'error'; message: string }
   | { type: 'status'; running: boolean }
   | { type: 'notice'; text: string }
-  | { type: 'plan'; plan: Plan };
+  | { type: 'plan'; plan: Plan }
+  | ({ type: 'pull_request' } & PullRequestInfo);
 
 const SYSTEM_PROMPT = `You are Flow Agent, a voice-native coding agent. The user talks to you by voice and hears your replies read aloud.
 
@@ -27,6 +28,7 @@ Rules:
 - To change code, read the file first, then use edit_file with a snippet copied exactly from it. Use write_file only for new files.
 - After changing code, run the project's tests with run_command (find the test command in package.json, pyproject.toml, Makefile or similar). If they fail, read the error, fix it, and run them again. After three failed attempts, stop and explain what is failing.
 - Keep changes small and focused on what the user asked for.
+- When the user asks to ship, open a PR, or the task says so: call create_branch before editing, then after the tests pass call commit with a clear message, then open_pull_request. Never push with run_command.
 - The user may interrupt you mid-task. An interruption overrides the earlier instruction. First call update_plan: keep finished steps as done, mark steps that no longer fit as dropped, and add the new steps. Say the change in one sentence, then continue.
 - When finished, give a short spoken summary (one to three sentences). Put any file paths or code after the summary.`;
 
@@ -118,6 +120,11 @@ export class Agent extends EventEmitter {
     ]
       .filter(Boolean)
       .join('\n');
+  }
+
+  /** Resolves once nothing is running or queued. */
+  async whenIdle(): Promise<void> {
+    while (this.busy) await this.running;
   }
 
   /** Stop the current task without giving a new instruction. */
@@ -219,6 +226,7 @@ export class Agent extends EventEmitter {
       const out = await tool.run(args, {
         signal,
         onFileChange: (c) => this.send({ type: 'file_changed', ...c }),
+        onPullRequest: (pr) => this.send({ type: 'pull_request', ...pr }),
       });
       // Keep the head (exit code) and the tail (where test failures land).
       const preview = out.length > 2000 ? `${out.slice(0, 300)}\n…\n${out.slice(-1700)}` : out;
