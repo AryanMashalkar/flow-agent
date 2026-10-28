@@ -64,7 +64,7 @@ async function createPullRequest(
   title: string,
   body: string,
   signal: AbortSignal,
-): Promise<{ url: string; created: boolean }> {
+): Promise<{ url: string; created: boolean } | null> {
   const remote = parseGitHubRemote((await git(root, ['remote', 'get-url', 'origin'])).out);
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (remote && token) {
@@ -94,7 +94,8 @@ async function createPullRequest(
     const q = new URLSearchParams({ expand: '1', title, body });
     return { url: `https://github.com/${remote.owner}/${remote.repo}/compare/${base}...${branch}?${q}`, created: false };
   }
-  throw new Error('origin is not a GitHub remote, so a pull request cannot be opened.');
+  // A local or non-GitHub remote (like the bundled demo's): the push is the whole result.
+  return null;
 }
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[], run: Tool['run']): Tool {
@@ -159,7 +160,9 @@ export function gitTools(root: string): Tool[] {
         await mustGit(root, ['push', '-u', 'origin', branch], ctx.signal);
         const title = String(args.title ?? '').trim() || branch;
         const body = `${String(args.body ?? '').trim()}\n\n_Opened by voice with Flow Agent._`.trim();
-        const { url, created } = await createPullRequest(root, branch, base, title, body, ctx.signal);
+        const pr = await createPullRequest(root, branch, base, title, body, ctx.signal);
+        if (!pr) return `Pushed ${branch} to origin. origin is not on GitHub, so there is no pull request page to open.`;
+        const { url, created } = pr;
         ctx.onPullRequest?.({ url, title, created });
         return created
           ? `Pushed ${branch} and opened a pull request: ${url}`

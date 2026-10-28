@@ -18,7 +18,13 @@ try {
 
 const workspace = path.resolve(process.env.WORKSPACE || process.cwd());
 const port = Number(process.env.PORT) || 4242;
-const llm = llmFromEnv();
+let llm: ReturnType<typeof llmFromEnv>;
+try {
+  llm = llmFromEnv();
+} catch (err) {
+  console.error(`\n  ${(err as Error).message}\n`);
+  process.exit(1);
+}
 const agent = new Agent({ llm, tools: allTools(workspace) });
 
 const metrics = { wordsDictated: 0, instructions: 0, interruptions: 0, toolCalls: 0, filesChanged: 0, testRuns: 0, replans: 0, prsOpened: 0, startedAt: Date.now() };
@@ -49,6 +55,8 @@ const server = createServer(async (req, res) => {
 });
 
 const wss = new WebSocketServer({ server, path: '/ws' });
+// Listen errors surface on the http server below; the WebSocket server only re-emits them.
+wss.on('error', () => {});
 
 function broadcast(msg: unknown): void {
   const data = JSON.stringify(msg);
@@ -130,6 +138,12 @@ wss.on('connection', (ws: WebSocket) => {
       board.run(msg.all ? { kind: 'all' } : { kind: 'one', id: Number(msg.id) });
     }
   });
+});
+
+server.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code !== 'EADDRINUSE') throw err;
+  console.error(`\n  Port ${port} is busy. Flow Agent is probably already running: close that window, or set PORT in .env.\n`);
+  process.exit(1);
 });
 
 server.listen(port, () => {

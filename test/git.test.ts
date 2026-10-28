@@ -76,6 +76,18 @@ test('open_pull_request refuses main, pushes a branch, and offers the PR page wi
   }
 });
 
+test('open_pull_request with a local origin just pushes the branch', async () => {
+  const { work, origin } = await repo();
+  await byName(work, 'create_branch').run({ name: 'fix login' }, ctx);
+  await writeFile(path.join(work, 'login.js'), 'export const ok = true;\n');
+  await byName(work, 'commit').run({ message: 'Fix login' }, ctx);
+  prs.length = 0;
+  const out = await byName(work, 'open_pull_request').run({ title: 'Fix login' }, ctx);
+  assert.match(out, /Pushed flow\/fix-login to origin/);
+  assert.equal((await git(origin, ['rev-parse', '--verify', 'flow/fix-login'])).code, 0);
+  assert.equal(prs.length, 0, 'no PR link without GitHub');
+});
+
 test('run_command will not push; that goes through open_pull_request', async () => {
   const { work } = await repo();
   const run = allTools(work).find((t) => t.spec.function.name === 'run_command')!;
