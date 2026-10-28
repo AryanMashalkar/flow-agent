@@ -21,11 +21,14 @@ header {
 }
 .brand { font-weight: 700; font-size: 18px; display: flex; align-items: center; gap: 10px; }
 .meta { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#model-status { color: var(--warn); margin-right: 8px; }
+#model-status::before { content: "● "; animation: pulse-text 1.4s infinite; }
+@keyframes pulse-text { 50% { opacity: 0.3; } }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
 .dot.running { background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: pulse 1.4s infinite; }
 @keyframes pulse { 70% { box-shadow: 0 0 0 10px transparent; } }
 
-.metrics { display: grid; grid-template-columns: repeat(7, 1fr); border-bottom: 1px solid var(--line); }
+.metrics { display: grid; grid-template-columns: repeat(8, 1fr); border-bottom: 1px solid var(--line); }
 .metrics div { padding: 10px 16px; display: flex; flex-direction: column; }
 .metrics b { font-size: 22px; font-variant-numeric: tabular-nums; }
 .metrics span { color: var(--muted); font-size: 12px; }
@@ -95,6 +98,8 @@ dialog p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
 dialog input:not([type=file]) { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
 dialog textarea { font-size: 14px; }
 .file { display: block; margin-top: 8px; color: var(--muted); font-size: 13px; }
+#recap-dialog { width: min(900px, calc(100vw - 32px)); }
+#recap-card { width: 100%; height: auto; border-radius: 10px; display: block; }
 #drop-hint { position: fixed; inset: 0; display: grid; place-items: center; background: rgb(0 0 0 / 0.65); color: white; font-size: 22px; font-weight: 700; border: 3px dashed var(--accent); pointer-events: none; }
 #drop-hint[hidden] { display: none; }
 

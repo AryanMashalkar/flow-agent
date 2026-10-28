@@ -150,4 +150,17 @@ server.listen(port, () => {
   console.log(`\n  Flow Agent is listening on http://localhost:${port}`);
   console.log(`  Workspace: ${workspace}`);
   console.log(`  Model:     ${llm.label}\n`);
+  if (process.env.WARMUP !== '0') void warmUp();
 });
+
+/** One tiny request at startup, so the first spoken instruction doesn't hit a cold or busy model. */
+async function warmUp(): Promise<void> {
+  const started = Date.now();
+  try {
+    await llm.chat([{ role: 'user', content: 'Reply with the single word OK.' }], [], AbortSignal.timeout(90_000));
+    console.log(`  Model ready (${((Date.now() - started) / 1000).toFixed(1)}s): ${llm.label}\n`);
+    broadcast({ type: 'metrics', model: llm.label, ...metrics });
+  } catch (err) {
+    console.log(`  Warm-up failed: ${(err as Error).message}\n`);
+  }
+}

@@ -15,13 +15,16 @@ export type AgentEvent =
   | { type: 'error'; message: string }
   | { type: 'status'; running: boolean }
   | { type: 'notice'; text: string }
+  /** Model retries and backup switches: shown as a status chip, not in the log. */
+  | { type: 'model_status'; text: string }
   | { type: 'plan'; plan: Plan }
   | ({ type: 'pull_request' } & PullRequestInfo);
 
 const SYSTEM_PROMPT = `You are Flow Agent, a voice-native coding agent. The user talks to you by voice and hears your replies read aloud.
 
 Rules:
-- Start every task by calling update_plan with a short checklist (two to seven steps). Mark one step active at a time, and call update_plan again as steps finish.
+- Start every coding task by calling update_plan with a short checklist (two to seven steps). Mark one step active at a time, and call update_plan again as steps finish.
+- If the user only asks a question you can answer without the workspace, answer it directly in two or three spoken sentences. Use no tools and no plan for that.
 - Before every tool call, write ONE short spoken sentence (under 15 words) saying what you are about to do. No markdown, no code in that sentence.
 - Be autonomous: explore the workspace with your tools instead of asking questions you could answer yourself.
 - Be quick: every model call is slow and rate limited. Call several tools in one turn when they don't depend on each other (for example update_plan plus reading two files). Explore only what the task needs.
@@ -29,6 +32,8 @@ Rules:
 - After changing code, run the project's tests with run_command (find the test command in package.json, pyproject.toml, Makefile or similar). If they fail, read the error, fix it, and run them again. After three failed attempts, stop and explain what is failing.
 - Keep changes small and focused on what the user asked for.
 - When the user asks to ship, open a PR, or the task says so: call create_branch before editing, then after the tests pass call commit with a clear message, then open_pull_request. Never push with run_command.
+- If you changed code and the user did not ask to ship it, end your summary with: "Want me to open a pull request?" If they say yes, call commit and then open_pull_request.
+- File contents must use real characters: write -> and &, never HTML entities like &gt; or escapes like \\u0026.
 - The user may interrupt you mid-task. An interruption overrides the earlier instruction. First call update_plan: keep finished steps as done, mark steps that no longer fit as dropped, and add the new steps. Say the change in one sentence, then continue.
 - When finished, give a short spoken summary (one to three sentences). Put any file paths or code after the summary.`;
 
@@ -79,7 +84,7 @@ export class Agent extends EventEmitter {
     super();
     this.tools = new Map(opts.tools.map((t) => [t.spec.function.name, t]));
     this.maxSteps = opts.maxSteps ?? 25;
-    opts.llm.onNotice = (text) => this.send({ type: 'notice', text });
+    opts.llm.onNotice = (text) => this.send({ type: 'model_status', text });
   }
 
   get busy(): boolean {
@@ -103,7 +108,7 @@ export class Agent extends EventEmitter {
     this.running = this.running.then(() => {
       this.queued--;
       this.replanReason = interrupt ? text : null;
-      this.history.push({ role: 'user', content: interrupt ? this.interruption(text) : `${text}\n\n(Start with update_plan.)` });
+      this.history.push({ role: 'user', content: interrupt ? this.interruption(text) : `${text}\n\n(If this is a coding task, start with update_plan.)` });
       // A newer instruction is already queued behind this one: record this one and let that run.
       if (gen !== this.generation) return;
       return this.loop();

@@ -253,18 +253,69 @@ export class OpenAICompatibleLLM implements LLM {
   }
 }
 
-export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): LLM {
-  const provider = (env.LLM_PROVIDER || 'gemini').toLowerCase();
-  const preset = PRESETS[provider];
-  const baseUrl = env.LLM_BASE_URL || preset?.baseUrl;
-  const model = env.LLM_MODEL || preset?.model;
-  if (!baseUrl || !model) {
-    throw new Error(`Unknown LLM_PROVIDER "${provider}". Set LLM_BASE_URL and LLM_MODEL for a custom provider.`);
+/**
+ * Two providers, each with its own free quota: when the main one fails even after its own
+ * retries and backup models, the request goes to the other provider, which then stays in
+ * charge for a few minutes.
+ */
+export class FailoverLLM implements LLM {
+  private backupUntil = 0;
+  private notify?: (text: string) => void;
+
+  constructor(
+    private main: LLM,
+    private backup: LLM,
+    private backupMs = 5 * 60_000,
+  ) {}
+
+  get label(): string {
+    return Date.now() < this.backupUntil ? this.backup.label : this.main.label;
   }
-  if (!env.LLM_API_KEY && provider !== 'ollama') {
-    throw new Error(`LLM_API_KEY is missing. Copy .env.example to .env and add a free ${provider} key${KEY_URLS[provider] ? ` from ${KEY_URLS[provider]}` : ''}.`);
+
+  get onNotice(): ((text: string) => void) | undefined {
+    return this.notify;
+  }
+
+  set onNotice(fn: ((text: string) => void) | undefined) {
+    this.notify = fn;
+    this.main.onNotice = fn;
+    this.backup.onNotice = fn;
+  }
+
+  async chat(messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<ChatResult> {
+    if (Date.now() < this.backupUntil) return this.backup.chat(messages, tools, signal);
+    try {
+      return await this.main.chat(messages, tools, signal);
+    } catch (err) {
+      if (signal.aborted) throw err;
+      const text = `${this.main.label} isn't answering, switching to ${this.backup.label}.`;
+      console.log(`  ${text}`);
+      this.notify?.(text);
+      this.backupUntil = Date.now() + this.backupMs;
+      return this.backup.chat(messages, tools, signal);
+    }
+  }
+}
+
+function providerFromEnv(provider: string, env: NodeJS.ProcessEnv, prefix: 'LLM' | 'LLM_BACKUP'): OpenAICompatibleLLM {
+  const preset = PRESETS[provider];
+  const baseUrl = env[`${prefix}_BASE_URL`] || preset?.baseUrl;
+  const model = env[`${prefix}_MODEL`] || preset?.model;
+  const key = env[`${prefix}_API_KEY`];
+  if (!baseUrl || !model) {
+    throw new Error(`Unknown ${prefix}_PROVIDER "${provider}". Set ${prefix}_BASE_URL and ${prefix}_MODEL for a custom provider.`);
+  }
+  if (!key && provider !== 'ollama') {
+    throw new Error(`${prefix}_API_KEY is missing. Copy .env.example to .env and add a free ${provider} key${KEY_URLS[provider] ? ` from ${KEY_URLS[provider]}` : ''}.`);
   }
   const timeoutMs = Number(env.LLM_TIMEOUT_MS) || 45_000;
-  const fallbacks = (env.LLM_FALLBACK_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);
-  return new OpenAICompatibleLLM(baseUrl, model, env.LLM_API_KEY, !env.LLM_MODEL, fallbacks, undefined, undefined, timeoutMs);
+  const fallbacks = prefix === 'LLM' ? (env.LLM_FALLBACK_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean) : [];
+  return new OpenAICompatibleLLM(baseUrl, model, key, !env[`${prefix}_MODEL`], fallbacks, undefined, undefined, timeoutMs);
+}
+
+export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): LLM {
+  const main = providerFromEnv((env.LLM_PROVIDER || 'gemini').toLowerCase(), env, 'LLM');
+  const backupProvider = env.LLM_BACKUP_PROVIDER?.trim().toLowerCase();
+  if (!backupProvider) return main;
+  return new FailoverLLM(main, providerFromEnv(backupProvider, env, 'LLM_BACKUP'));
 }
