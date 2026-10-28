@@ -56,7 +56,7 @@ If the default model is ever retired, the newest one your key can use is picked 
 | `ollama` | Free, runs locally | No key needed. Pull a model first, for example `ollama pull qwen2.5-coder:7b` |
 | anything else | – | Set `LLM_BASE_URL` and `LLM_MODEL` |
 
-Free tiers get busy. When the model answers "overloaded", Flow Agent retries with backoff and then switches to a backup model from the same provider (set your own with `LLM_FALLBACK_MODELS`). Requests that hang longer than 45 seconds (`LLM_TIMEOUT_MS`) are retried too, and the UI shows each retry.
+Free tiers get busy. When the model answers "overloaded", Flow Agent retries with backoff and then switches to a backup model from the same provider (set your own with `LLM_FALLBACK_MODELS`). Requests that hang longer than 45 seconds (`LLM_TIMEOUT_MS`) are retried too. If the whole provider is down, set a second one with `LLM_BACKUP_PROVIDER` and `LLM_BACKUP_API_KEY` (for example Groq first, Gemini as backup) and requests switch over on their own. A tiny warm-up request at startup makes sure the first spoken instruction doesn't hit a cold model.
 
 ## Architecture
 
@@ -101,6 +101,8 @@ Paste a meeting transcript (from Wispr Notetaker or anywhere) with the **Meeting
 - **Interruptions are just more dictation.** You don't press a stop button to change course; you talk over the agent.
 - **Meetings come in as transcripts** from Wispr Notetaker or anything else, and turn into tasks the agent can run.
 - **This project was built by voice.** Every feature request, bug report and change of mind during the build was spoken through Wispr Flow.
+
+Trying it for the first time, or testing it for us? See [TRY_IT.md](docs/TRY_IT.md).
 
 ## Development
 
