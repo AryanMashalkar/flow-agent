@@ -46,7 +46,14 @@ Free tiers get busy. When the model answers "overloaded", Flow Agent retries wit
 - **Barge-in:** anything you say while the agent is working is an interruption. The model request in flight is aborted, any tool calls it hadn't run yet are marked as skipped, and the loop restarts with your interruption added to the same conversation, so the agent re-plans instead of starting over.
 - **Live plan:** every task starts with a short checklist in the side panel, and steps tick off as the agent works. When you barge in, the agent is reminded of the plan it had and re-plans first: dropped steps are struck through, new ones flash in, and a banner names the interruption that caused it.
 - **Edit, test, fix:** the agent edits files with exact-snippet replacements (diffs show live in the UI), runs your test command, and keeps fixing until the tests pass. A running test is killed the moment you barge in. Destructive commands such as `rm -rf /` or `git push --force` are refused.
+- **Ship by voice:** say "commit this and open a PR". The agent works on its own branch (it moves off `main` before committing), pushes it, and opens the pull request. It never pushes `main` and never force-pushes. With `GITHUB_TOKEN` in `.env` (or a signed-in `gh` CLI) the PR is created for you; without one, you get a one-click link to open it.
 - **Voice out:** the agent says one short sentence before each action, and the browser reads it aloud. As soon as you start dictating, it goes quiet.
+
+## Meetings in, pull requests out
+
+Paste a meeting transcript (from Wispr Notetaker or anywhere) with the **Meeting…** button, or just drop the file on the page. Flow Agent pulls out the action items, marks which ones are code, and notes who owns each. Then say **"do task 2"** or **"do all code tasks"**: each one runs on its own branch and ends in a pull request. Try it with [`docs/sample-meeting.txt`](docs/sample-meeting.txt).
+
+![A standup transcript turned into tasks, and task 2 shipped as a pull request](docs/meeting-to-pr.png)
 
 ## Development
 
@@ -60,5 +67,5 @@ npm run typecheck
 - [x] Day 1: voice loop, agent core, read-only file tools, barge-in
 - [x] Day 2: file edits with live diffs, running tests, and fix-until-green
 - [x] Day 3: live plan panel and visible re-planning on barge-in
-- [ ] Day 4: git branches and PRs, plus meeting transcript input
+- [x] Day 4: branches, commits and PRs by voice, plus meeting transcripts → tasks → PRs
 - [ ] Day 5: dogfooding Flow Agent on itself, and polish

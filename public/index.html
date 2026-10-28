@@ -19,6 +19,7 @@
     <div><b id="m-files">0</b><span>files changed</span></div>
     <div><b id="m-tests">0</b><span>commands run</span></div>
     <div><b id="m-replans">0</b><span>re-plans</span></div>
+    <div><b id="m-prs">0</b><span>PRs opened</span></div>
   </section>
 
   <div class="work">
@@ -30,6 +31,12 @@
       </div>
       <div id="plan-banner" hidden></div>
       <ol id="plan-steps"><li class="empty">Say what you want built. The plan shows up here.</li></ol>
+
+      <div class="plan-head meeting-head">
+        <span id="meeting-title">Meeting tasks</span>
+        <button id="run-all" class="secondary small" hidden>Run all code tasks</button>
+      </div>
+      <ol id="meeting-tasks"><li class="empty">Drop a meeting transcript anywhere on the page, or use the Meeting button. Then say "do task 1".</li></ol>
     </aside>
   </div>
 
@@ -39,10 +46,27 @@
       <label><input type="checkbox" id="autosend" checked /> Auto-send after dictation</label>
       <label><input type="checkbox" id="narrate" checked /> Speak replies</label>
       <span class="spacer"></span>
+      <button id="meeting" class="secondary">Meeting…</button>
       <button id="stop" class="secondary">Stop</button>
       <button id="send">Send</button>
     </div>
   </footer>
+
+  <dialog id="meeting-dialog">
+    <form method="dialog">
+      <h3>Add a meeting transcript</h3>
+      <p>Paste a transcript from Wispr Notetaker or any other notes. Flow Agent pulls out the action items.</p>
+      <input id="meeting-name" placeholder="Meeting name (optional)" />
+      <textarea id="meeting-text" rows="12" placeholder="Paste the transcript here…"></textarea>
+      <label class="file">or choose a file <input type="file" id="meeting-file" accept=".txt,.md,.vtt,.srt,text/plain" /></label>
+      <div class="controls">
+        <span class="spacer"></span>
+        <button value="cancel" class="secondary">Cancel</button>
+        <button id="meeting-submit" value="ok">Find tasks</button>
+      </div>
+    </form>
+  </dialog>
+  <div id="drop-hint" hidden>Drop the transcript to find its tasks</div>
 
   <script src="app.js"></script>
 </body>
