@@ -85,7 +85,9 @@ A barge-in aborts the model request in flight (`AbortController`), kills any run
 - **Live plan:** every task starts with a short checklist in the side panel, and steps tick off as the agent works. When you barge in, the agent is reminded of the plan it had and re-plans first: dropped steps are struck through, new ones flash in, and a banner names the interruption that caused it.
 - **Edit, test, fix:** the agent edits files with exact-snippet replacements (diffs show live in the UI), runs your test command, and keeps fixing until the tests pass. A running test is killed the moment you barge in. Destructive commands such as `rm -rf /` or `git push --force` are refused.
 - **Ship by voice:** say "commit this and open a PR". The agent works on its own branch (it moves off `main` before committing), pushes it, and opens the pull request. It never pushes `main` and never force-pushes. With `GITHUB_TOKEN` in `.env` (or a signed-in `gh` CLI) the PR is created for you; without one, you get a one-click link to open it.
-- **Voice out:** the agent says one short sentence before each action, and the browser reads it aloud. As soon as you start dictating, it goes quiet.
+- **Voice out:** the agent says one short sentence before each action, read aloud in the most natural voice your system has. As soon as you start dictating, it goes quiet. When it finishes a change you didn't ask to ship, it asks "Want me to open a pull request?" and you just say yes.
+- **Session recap:** say "recap" (or click Recap) for a shareable card of the session: words dictated, keys typed, barge-ins, re-plans, files changed and PRs. A real voice-only session shows **0 keys typed**.
+- **Calm when the model isn't:** free-tier retries and backup-model switches show as a small chip in the header, not in the conversation.
 
 ## Meetings in, pull requests out
 
@@ -117,6 +119,7 @@ CI runs all three on Linux and Windows.
 - [x] Day 3: live plan panel and visible re-planning on barge-in
 - [x] Day 4: branches, commits and PRs by voice, plus meeting transcripts → tasks → PRs
 - [x] Day 5: one-command demo app, architecture diagram, CI on Linux and Windows, friendlier startup errors
+- [x] Day 6: session recap card, keys-typed counter, spoken PR confirmation, natural voice, quiet model status
 
 ## License
 

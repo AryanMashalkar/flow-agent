@@ -14,7 +14,8 @@ Flow Agent is an autonomous dev agent that you drive entirely with Wispr Flow.
 - **Talk over it.** Say "stop, overdue ones go first" mid-task and the agent drops the in-flight step, kills the running command, and re-plans. The plan panel strikes out the dropped steps and flashes in the new ones, with a banner quoting what you said.
 - **Ship by voice.** "Commit this and open a PR" puts the work on its own branch, pushes it and opens the pull request. It never touches main and never force-pushes.
 - **Meetings in, PRs out.** Drop in a meeting transcript. Flow Agent pulls out the action items, separates code tasks from people tasks, and "do task 2" turns one into a pull request.
-- **Metrics on screen:** words dictated, instructions, barge-ins, files changed, commands run, re-plans and PRs opened.
+- **Metrics on screen:** words dictated, keys typed, instructions, barge-ins, files changed, commands run, re-plans and PRs opened. Say "recap" for a shareable session card; a voice-only session shows 0 keys typed.
+- **Voice both ways:** the agent narrates in a natural voice and asks before shipping ("Want me to open a pull request?"), and you answer by voice.
 
 ## How Wispr Flow is used
 

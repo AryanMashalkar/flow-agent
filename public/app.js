@@ -3,6 +3,12 @@ const log = $('log');
 const input = $('input');
 
 let ws;
+let lastMetrics = null;
+// Keys pressed in the command box (dictation excluded): the number a voice-only session keeps at zero.
+let keysTyped = 0;
+function countKey() {
+  $('m-keys').textContent = ++keysTyped;
+}
 let autoSendTimer = null;
 let dictatedSinceSend = false;
 
@@ -43,12 +49,26 @@ function addDetails(title, status, open = false) {
   return { el, badge, pre };
 }
 
+// The default browser voice sounds robotic; prefer the neural voices most systems ship.
+let voice = null;
+function pickVoice() {
+  const voices = speechSynthesis.getVoices().filter((v) => v.lang.startsWith('en'));
+  const rank = (v) =>
+    /natural|neural/i.test(v.name) ? 0 : /online/i.test(v.name) ? 1 : /google/i.test(v.name) ? 2 : /aria|jenny|guy|samantha|daniel/i.test(v.name) ? 3 : 9;
+  voice = voices.sort((a, b) => rank(a) - rank(b))[0] ?? null;
+}
+if ('speechSynthesis' in window) {
+  pickVoice();
+  speechSynthesis.onvoiceschanged = pickVoice;
+}
+
 function speak(text) {
   if (!$('narrate').checked || !('speechSynthesis' in window) || !text) return;
   // Speak only the prose, not trailing code or paths.
   const spoken = text.split(/\n\s*\n|```/)[0].slice(0, 400);
   const u = new SpeechSynthesisUtterance(spoken);
-  u.rate = 1.08;
+  if (voice) u.voice = voice;
+  u.rate = 1.05;
   speechSynthesis.speak(u);
 }
 
@@ -57,6 +77,8 @@ function shush() {
 }
 
 function handle(e) {
+  // Any real progress means the model answered, so the busy chip goes away.
+  if (['say', 'tool', 'done', 'stopped', 'error', 'plan'].includes(e.type)) $('model-status').hidden = true;
   const working = thinking.isConnected;
   dispatch(e);
   if (working && thinking.isConnected && e.type !== 'status') showThinking();
@@ -70,6 +92,7 @@ function dispatch(e) {
       setRunning(e.running);
       break;
     case 'metrics':
+      lastMetrics = e;
       $('m-words').textContent = e.wordsDictated;
       $('m-instr').textContent = e.instructions;
       $('m-interrupts').textContent = e.interruptions;
@@ -141,6 +164,10 @@ function dispatch(e) {
       break;
     case 'notice':
       add('notice', e.text);
+      break;
+    case 'model_status':
+      $('model-status').hidden = false;
+      $('model-status').textContent = e.text.replace(/\.\.\.|…$/, '');
       break;
     case 'stopped':
       add('notice', 'Stopped. Waiting for your next instruction.');
@@ -281,6 +308,7 @@ function send() {
   shush();
   // A bare spoken "stop" halts the agent; anything longer is a new instruction or a barge-in.
   if (/^(stop|halt|cancel)[.!]?$/i.test(text)) ws.send(JSON.stringify({ type: 'stop' }));
+  else if (/^(recap|wrap( it)? up|show (me )?(my )?(stats|recap))[.!]?$/i.test(text)) showRecap();
   else ws.send(JSON.stringify({ type: 'command', text }));
 }
 
@@ -289,6 +317,7 @@ input.addEventListener('input', (e) => {
   shush();
   // Wispr Flow inserts a whole phrase at once; normal typing inserts one character.
   if ((e.data && e.data.length > 2) || e.inputType === 'insertFromPaste') dictatedSinceSend = true;
+  else countKey();
   clearTimeout(autoSendTimer);
   if ($('autosend').checked && dictatedSinceSend) autoSendTimer = setTimeout(send, 1200);
 });
@@ -296,6 +325,7 @@ input.addEventListener('input', (e) => {
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
+    countKey();
     send();
   }
 });
@@ -343,3 +373,77 @@ window.addEventListener('drop', async (e) => {
   const file = e.dataTransfer.files[0];
   if (file) sendTranscript(file.name.replace(/\.[^.]+$/, ''), await file.text());
 });
+
+// Session recap: a shareable card of what was done by voice.
+$('recap').onclick = showRecap;
+$('recap-save').onclick = () => {
+  const a = document.createElement('a');
+  a.download = 'flow-agent-recap.png';
+  a.href = $('recap-card').toDataURL('image/png');
+  a.click();
+};
+
+function showRecap() {
+  const m = lastMetrics ?? {};
+  const minutes = m.startedAt ? Math.max(1, Math.round((Date.now() - m.startedAt) / 60000)) : 0;
+  const tiles = [
+    ['words dictated', m.wordsDictated ?? 0],
+    ['keys typed', keysTyped],
+    ['instructions', m.instructions ?? 0],
+    ['barge-ins', m.interruptions ?? 0],
+    ['re-plans', m.replans ?? 0],
+    ['files changed', m.filesChanged ?? 0],
+    ['commands run', m.testRuns ?? 0],
+    ['PRs opened', m.prsOpened ?? 0],
+  ];
+  drawRecap($('recap-card'), tiles, minutes);
+  $('recap-dialog').showModal();
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  speak(
+    `In ${plural(minutes, 'minute')} you dictated ${plural(m.wordsDictated ?? 0, 'word')}, ` +
+      `interrupted me ${plural(m.interruptions ?? 0, 'time')}, changed ${plural(m.filesChanged ?? 0, 'file')} ` +
+      `and opened ${plural(m.prsOpened ?? 0, 'pull request')}` +
+      (keysTyped === 0 ? ', without typing a single key.' : '.'),
+  );
+}
+
+function drawRecap(canvas, tiles, minutes) {
+  const c = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const bg = c.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#16132e');
+  bg.addColorStop(1, '#0e0f13');
+  c.fillStyle = bg;
+  c.fillRect(0, 0, W, H);
+  const font = (size, weight = 400) => `${weight} ${size}px ui-sans-serif, system-ui, "Segoe UI", sans-serif`;
+
+  c.fillStyle = '#e7e9ee';
+  c.font = font(44, 700);
+  c.fillText('Flow Agent session', 60, 95);
+  c.fillStyle = '#8a90a0';
+  c.font = font(24);
+  c.fillText(`Coded by voice with Wispr Flow · ${minutes} min · ${new Date().toLocaleDateString()}`, 60, 135);
+
+  const cols = 4, gap = 20, tw = (W - 120 - gap * (cols - 1)) / cols, th = 170;
+  tiles.forEach(([label, value], i) => {
+    const x = 60 + (i % cols) * (tw + gap), y = 185 + Math.floor(i / cols) * (th + gap);
+    const star = label === 'keys typed' ? value === 0 : label === 'barge-ins' && value > 0;
+    c.fillStyle = star ? 'rgba(124, 108, 255, 0.28)' : 'rgba(255, 255, 255, 0.05)';
+    c.strokeStyle = star ? '#7c6cff' : '#262a35';
+    c.lineWidth = 2;
+    c.beginPath();
+    c.roundRect(x, y, tw, th, 16);
+    c.fill();
+    c.stroke();
+    c.fillStyle = '#e7e9ee';
+    c.font = font(72, 700);
+    c.fillText(String(value), x + 26, y + 98);
+    c.fillStyle = '#8a90a0';
+    c.font = font(24);
+    c.fillText(label, x + 26, y + 140);
+  });
+
+  c.fillStyle = '#8a90a0';
+  c.font = font(20);
+  c.fillText('github.com/AryanMashalkar/flow-agent  ·  #NoHandsChallenge', 60, H - 40);
+}

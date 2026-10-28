@@ -9,7 +9,7 @@
 <body>
   <header>
     <div class="brand"><span class="dot" id="status-dot"></span> Flow Agent</div>
-    <div class="meta"><span id="model">connecting…</span> · <span id="workspace"></span></div>
+    <div class="meta"><span id="model-status" hidden></span><span id="model">connecting…</span> · <span id="workspace"></span></div>
   </header>
 
   <section class="metrics">
@@ -20,6 +20,7 @@
     <div><b id="m-tests">0</b><span>commands run</span></div>
     <div><b id="m-replans">0</b><span>re-plans</span></div>
     <div><b id="m-prs">0</b><span>PRs opened</span></div>
+    <div><b id="m-keys">0</b><span>keys typed</span></div>
   </section>
 
   <div class="work">
@@ -46,6 +47,7 @@
       <label><input type="checkbox" id="autosend" checked /> Auto-send after dictation</label>
       <label><input type="checkbox" id="narrate" checked /> Speak replies</label>
       <span class="spacer"></span>
+      <button id="recap" class="secondary">Recap</button>
       <button id="meeting" class="secondary">Meeting…</button>
       <button id="stop" class="secondary">Stop</button>
       <button id="send">Send</button>
@@ -63,6 +65,16 @@
         <span class="spacer"></span>
         <button value="cancel" class="secondary">Cancel</button>
         <button id="meeting-submit" value="ok">Find tasks</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="recap-dialog">
+    <form method="dialog">
+      <canvas id="recap-card" width="1200" height="630"></canvas>
+      <div class="controls">
+        <span class="spacer"></span>
+        <button id="recap-save" type="button" class="secondary">Save image</button>
+        <button value="close">Close</button>
       </div>
     </form>
   </dialog>
