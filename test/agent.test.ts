@@ -399,3 +399,15 @@ test('retryAfterSeconds reads headers and Gemini retryDelay', () => {
   assert.equal(retryAfterSeconds(new Headers(), '[{"error":{"details":[{"retryDelay": "23.4s"}]}}]'), 24);
   assert.equal(retryAfterSeconds(new Headers(), 'nothing'), undefined);
 });
+
+test('reset stops a running task and starts a clean conversation', async () => {
+  const llm = new ScriptedLLM(['hang', { content: 'Fresh answer.' }]);
+  const agent = new Agent({ llm, tools: readOnlyTools(await workspace()) });
+  void agent.submit('Add tags to todos.');
+  await new Promise((r) => setTimeout(r, 20));
+  await agent.reset();
+  assert.equal(agent.busy, false);
+  assert.equal(agent.history.length, 1, 'only the system prompt is left');
+  await agent.submit('What does this project do?');
+  assert.equal(llm.calls[1].length, 2, 'the new task sees none of the old one');
+});

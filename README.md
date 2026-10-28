@@ -87,6 +87,7 @@ A barge-in aborts the model request in flight (`AbortController`), kills any run
 - **Ship by voice:** say "commit this and open a PR". The agent works on its own branch (it moves off `main` before committing), pushes it, and opens the pull request. It never pushes `main` and never force-pushes. With `GITHUB_TOKEN` in `.env` (or a signed-in `gh` CLI) the PR is created for you; without one, you get a one-click link to open it.
 - **Voice out:** the agent says one short sentence before each action, read aloud in the most natural voice your system has. As soon as you start dictating, it goes quiet. When it finishes a change you didn't ask to ship, it asks "Want me to open a pull request?" and you just say yes.
 - **Session recap:** say "recap" (or click Recap) for a shareable card of the session: words dictated, keys typed, barge-ins, re-plans, files changed and PRs. A real voice-only session shows **0 keys typed**.
+- **History:** every session is kept in your browser, like a chat history. Reopen any past session from the sidebar (read only), or click **+ New** to start fresh.
 - **Calm when the model isn't:** free-tier retries and backup-model switches show as a small chip in the header, not in the conversation.
 
 ## Meetings in, pull requests out
