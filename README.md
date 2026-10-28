@@ -2,7 +2,9 @@
 
 **A coding agent you talk to, and talk over.** Dictate a feature with [Wispr Flow](https://wisprflow.ai). The agent explores your code, narrates what it's doing out loud, and if you change your mind mid-task ("stop, use Postgres not SQLite") it drops the in-flight step and re-plans on the spot.
 
-Built for the WeMakeDevs × Wispr Flow **No Hands** hackathon.
+Built for the WeMakeDevs × Wispr Flow **No Hands** hackathon. It was built hands-free too: every instruction that shaped it was spoken through Wispr Flow.
+
+[![CI](https://github.com/AryanMashalkar/flow-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/AryanMashalkar/flow-agent/actions/workflows/ci.yml)
 
 ![Flow Agent re-planning after a spoken barge-in: the SQLite steps are struck out and the Postgres steps take over](docs/screenshot.png)
 
@@ -25,6 +27,22 @@ npm start
 
 Open <http://localhost:4242>, click the text box, hold your Wispr Flow key and speak.
 
+### Try it on the bundled demo app
+
+```bash
+npm run demo
+```
+
+This copies a small todo app (with a planted bug or two) into `.demo/todo-app`, makes it a git repo, and starts Flow Agent on it. Every run starts fresh. Then say:
+
+1. *"Add a due date to todos and sort them soonest first."*
+2. While it works: *"Stop. Overdue ones go first, then the rest by created time, and add a test for it."* Watch the plan panel re-plan.
+3. Click **Meeting…**, choose [`docs/sample-meeting.txt`](docs/sample-meeting.txt), then say *"do the login crash task"* by its number, for example *"do task 2"*. It ends in a pushed branch.
+
+To get real pull requests out of the demo, create an empty GitHub repo and set `DEMO_REPO` in `.env` to its URL.
+
+### Your own project
+
 To point the agent at another project, set `WORKSPACE` in `.env`, or run `npm link` once and then run `flow-agent` from inside any project folder.
 
 ### Model providers
@@ -39,6 +57,26 @@ If the default model is ever retired, the newest one your key can use is picked 
 | anything else | – | Set `LLM_BASE_URL` and `LLM_MODEL` |
 
 Free tiers get busy. When the model answers "overloaded", Flow Agent retries with backoff and then switches to a backup model from the same provider (set your own with `LLM_FALLBACK_MODELS`). Requests that hang longer than 45 seconds (`LLM_TIMEOUT_MS`) are retried too, and the UI shows each retry.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  you(["🎙️ You"]) -- speak --> wispr["Wispr Flow"]
+  wispr -- types into --> ui["Browser UI<br/>dictation detection, auto-send"]
+  ui <-- WebSocket --> server["server.ts"]
+  server --> agent["Agent loop<br/>agent.ts"]
+  agent <-- "chat + tool calls" --> llm["Free LLM<br/>Gemini / Groq / Ollama"]
+  agent --> tools["Tools<br/>files · run_command · git · update_plan"]
+  tools --> repo[("Your repo")]
+  tools -- push + PR --> gh["GitHub"]
+  meeting["Meeting transcript"] --> board["MeetingBoard<br/>meeting.ts"] -- one task at a time --> agent
+  agent -- "say · plan · diffs · metrics" --> ui
+  ui -- speechSynthesis --> you
+  ui -. "new words while busy = barge-in" .-> agent
+```
+
+A barge-in aborts the model request in flight (`AbortController`), kills any running command's whole process tree, answers every unrun tool call with "Skipped: the user interrupted", and appends your words plus the current plan to the same conversation. The model's next move is a new `update_plan`, which the UI diffs against the old plan.
 
 ## How the voice loop works
 
@@ -55,12 +93,22 @@ Paste a meeting transcript (from Wispr Notetaker or anywhere) with the **Meeting
 
 ![A standup transcript turned into tasks, and task 2 shipped as a pull request](docs/meeting-to-pr.png)
 
+## Built with Wispr Flow
+
+- **Every instruction to the agent** is spoken with Wispr Flow. The UI tells dictation apart from typing (Wispr inserts whole phrases at once) and sends it after a 1.2 second pause, so there is no Enter key in the loop.
+- **Interruptions are just more dictation.** You don't press a stop button to change course; you talk over the agent.
+- **Meetings come in as transcripts** from Wispr Notetaker or anything else, and turn into tasks the agent can run.
+- **This project was built by voice.** Every feature request, bug report and change of mind during the build was spoken through Wispr Flow.
+
 ## Development
 
 ```bash
-npm test          # agent loop, barge-in, and tool sandbox tests (no API key needed)
+npm test             # agent loop, barge-in, git, meeting and sandbox tests (no API key needed)
+npm run test:demo    # the demo app's own tests
 npm run typecheck
 ```
+
+CI runs all three on Linux and Windows.
 
 ## Roadmap
 
@@ -68,4 +116,8 @@ npm run typecheck
 - [x] Day 2: file edits with live diffs, running tests, and fix-until-green
 - [x] Day 3: live plan panel and visible re-planning on barge-in
 - [x] Day 4: branches, commits and PRs by voice, plus meeting transcripts → tasks → PRs
-- [ ] Day 5: dogfooding Flow Agent on itself, and polish
+- [x] Day 5: one-command demo app, architecture diagram, CI on Linux and Windows, friendlier startup errors
+
+## License
+
+MIT
