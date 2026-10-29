@@ -38,7 +38,7 @@ const KEY_URLS: Record<string, string> = {
 
 const PRESETS: Record<string, { baseUrl: string; model: string }> = {
   gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.8-flash' },
-  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b' },
   ollama: { baseUrl: 'http://localhost:11434/v1', model: 'qwen2.5-coder:7b' },
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
 };
@@ -180,9 +180,9 @@ export class OpenAICompatibleLLM implements LLM {
         body: JSON.stringify(tools.length ? { model, messages, tools, tool_choice: 'auto' } : { model, messages }),
       });
       if (res.status !== 400) return res;
-      // Groq rejects a reply when the model writes a malformed tool call; a retry usually gets a good one.
+      // Groq rejects a reply when the model writes a malformed tool call or unparsable output; a retry usually gets a good one.
       const text = await res.text();
-      return new Response(text, { status: text.includes('tool_use_failed') ? 502 : 400 });
+      return new Response(text, { status: /tool_use_failed|output_parse_failed/.test(text) ? 502 : 400 });
     } catch (err) {
       if (signal.aborted) throw err;
       if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {

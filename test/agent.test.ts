@@ -314,25 +314,27 @@ test('old tool results are shortened before sending, recent ones kept', () => {
   assert.equal(history[1].content, big, 'the real history is not modified');
 });
 
-test('a malformed tool call from the provider is retried', async () => {
-  let calls = 0;
-  const server = http.createServer((req, res) => {
-    req.resume();
-    req.on('end', () => {
-      res.setHeader('content-type', 'application/json');
-      if (++calls === 1) {
-        res.statusCode = 400;
-        return res.end(JSON.stringify({ error: { code: 'tool_use_failed' } }));
-      }
-      res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
+for (const code of ['tool_use_failed', 'output_parse_failed']) {
+  test(`a ${code} reply from the provider is retried`, async () => {
+    let calls = 0;
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json');
+        if (++calls === 1) {
+          res.statusCode = 400;
+          return res.end(JSON.stringify({ error: { code } }));
+        }
+        res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
+      });
     });
+    await new Promise<void>((r) => server.listen(0, r));
+    const url = `http://localhost:${(server.address() as { port: number }).port}`;
+    const llm = new OpenAICompatibleLLM(url, 'main', 'k', false, [], [1]);
+    assert.equal((await llm.chat([], [], new AbortController().signal)).content, 'ok');
+    server.close();
   });
-  await new Promise<void>((r) => server.listen(0, r));
-  const url = `http://localhost:${(server.address() as { port: number }).port}`;
-  const llm = new OpenAICompatibleLLM(url, 'main', 'k', false, [], [1]);
-  assert.equal((await llm.chat([], [], new AbortController().signal)).content, 'ok');
-  server.close();
-});
+}
 
 test('update_plan is shown to the user and a barge-in marks the next plan as a re-plan', async () => {
   const plan1 = { steps: [{ text: 'Add SQLite', status: 'active' }, { text: 'Create users table', status: 'pending' }] };
