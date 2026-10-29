@@ -88,3 +88,14 @@ test('stopping leaves the current meeting task to run again', async () => {
   await new Promise((r) => setTimeout(r, 5));
   assert.deepEqual(board.tasks.map((t) => t.status), ['todo', 'todo', 'todo']);
 });
+
+test('a task that ends in an error goes back on the list, and each task is prepared first', async () => {
+  const prepared: number[] = [];
+  const runner = { failed: false, async submit(text: string) { this.failed = text.includes('task 1'); }, async whenIdle() {} };
+  const board = new MeetingBoard(new FakeLLM(), runner, () => {}, async (t) => void prepared.push(t.id));
+  await board.load('m', 't', new AbortController().signal);
+  board.run({ kind: 'all' });
+  while (board.tasks[2].status !== 'done') await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(board.tasks.map((t) => t.status), ['todo', 'todo', 'done']);
+  assert.deepEqual(prepared, [1, 3]);
+});

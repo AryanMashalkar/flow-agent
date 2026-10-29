@@ -8,6 +8,7 @@ import { llmFromEnv } from './llm.ts';
 import { allTools } from './tools.ts';
 import type { Plan } from './plan.ts';
 import { MeetingBoard, parseMeetingCommand } from './meeting.ts';
+import { startFromDefaultBranch } from './git.ts';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try {
@@ -66,7 +67,16 @@ function broadcast(msg: unknown): void {
   for (const client of wss.clients) if (client.readyState === client.OPEN) client.send(data);
 }
 
-const board = new MeetingBoard(llm, agent, (b) => broadcast(meetingState(b)));
+const board = new MeetingBoard(
+  llm,
+  agent,
+  (b) => broadcast(meetingState(b)),
+  async () => {
+    // Each meeting task gets its own branch off the default branch. Not a git repo: nothing to do.
+    const note = await startFromDefaultBranch(workspace).catch(() => '');
+    if (note) broadcast({ type: 'notice', text: note });
+  },
+);
 
 function meetingState(b: MeetingBoard) {
   return { type: 'meeting', name: b.name, tasks: b.tasks };

@@ -52,7 +52,7 @@ If the default model is ever retired, the newest one your key can use is picked 
 | `LLM_PROVIDER` | Cost | Notes |
 |---|---|---|
 | `gemini` (default) | Free tier | `gemini-3.8-flash` |
-| `groq` | Free tier, fastest | `llama-3.3-70b-versatile` |
+| `groq` | Free tier, fastest | `openai/gpt-oss-120b` |
 | `ollama` | Free, runs locally | No key needed. Pull a model first, for example `ollama pull qwen2.5-coder:7b` |
 | anything else | – | Set `LLM_BASE_URL` and `LLM_MODEL` |
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { branchName, git, gitTools, parseGitHubRemote } from '../src/git.ts';
+import { branchName, git, gitTools, parseGitHubRemote, startFromDefaultBranch } from '../src/git.ts';
 import type { PullRequestInfo, ToolContext } from '../src/tools.ts';
 import { allTools } from '../src/tools.ts';
 
@@ -92,4 +92,16 @@ test('run_command will not push; that goes through open_pull_request', async () 
   const { work } = await repo();
   const run = allTools(work).find((t) => t.spec.function.name === 'run_command')!;
   await assert.rejects(run.run({ command: 'git push origin main' }, ctx), /open_pull_request/);
+});
+
+test('startFromDefaultBranch returns to main and stashes unfinished work', async () => {
+  const { work } = await repo();
+  assert.equal(await startFromDefaultBranch(work), '', 'already on main: nothing to do');
+  await git(work, ['checkout', '-b', 'flow/task-1']);
+  await writeFile(path.join(work, 'half.js'), 'unfinished\n');
+  const note = await startFromDefaultBranch(work);
+  assert.match(note, /back to main.*git stash/);
+  assert.equal((await git(work, ['rev-parse', '--abbrev-ref', 'HEAD'])).out, 'main');
+  assert.equal((await git(work, ['status', '--porcelain'])).out, '');
+  assert.match((await git(work, ['stash', 'list'])).out, /unfinished work on flow\/task-1/);
 });

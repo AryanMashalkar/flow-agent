@@ -125,6 +125,8 @@ export interface TaskRunner {
   submit(text: string): Promise<void>;
   /** Resolves once nothing is running or queued, barge-ins included. */
   whenIdle(): Promise<void>;
+  /** True when the last task ended in an error (for example the model's rate limit), not a summary. */
+  readonly failed?: boolean;
 }
 
 /** Meeting tasks and a queue that hands code tasks to the agent one at a time. */
@@ -139,6 +141,8 @@ export class MeetingBoard {
     private llm: LLM,
     private runner: TaskRunner,
     private onUpdate: (board: MeetingBoard) => void,
+    /** Runs before each task, for example to start it from the default branch. */
+    private beforeTask: (task: MeetingTask) => Promise<void> = async () => {},
   ) {}
 
   async load(name: string, transcript: string, signal: AbortSignal): Promise<MeetingTask[]> {
@@ -186,11 +190,12 @@ export class MeetingBoard {
         this.cancelled = false;
         task.status = 'running';
         this.onUpdate(this);
+        await this.beforeTask(task);
         await this.runner.submit(taskInstruction(task));
         // A barge-in during the task is part of the task: wait for it to finish too.
         await this.runner.whenIdle();
-        // Stopped part-way: leave it on the list to run again.
-        task.status = this.cancelled ? 'todo' : 'done';
+        // Stopped part-way or failed: leave it on the list to run again.
+        task.status = this.cancelled || this.runner.failed ? 'todo' : 'done';
         this.onUpdate(this);
       }
     } finally {

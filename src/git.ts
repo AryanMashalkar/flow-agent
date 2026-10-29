@@ -38,6 +38,23 @@ export async function defaultBranch(root: string): Promise<string> {
   return 'main';
 }
 
+/**
+ * Go back to the default branch, so the next task's branch starts from it instead of stacking on
+ * the last task's. Unfinished changes are stashed, never thrown away. Returns what it did, or ''.
+ */
+export async function startFromDefaultBranch(root: string): Promise<string> {
+  const branch = await currentBranch(root);
+  const base = await defaultBranch(root);
+  if (branch === base) return '';
+  let stashed = '';
+  if ((await mustGit(root, ['status', '--porcelain'])).trim()) {
+    await mustGit(root, ['stash', 'push', '--include-untracked', '-m', `Flow Agent: unfinished work on ${branch}`]);
+    stashed = ` Unfinished changes from ${branch} are saved in git stash.`;
+  }
+  await mustGit(root, ['checkout', base]);
+  return `Switched from ${branch} back to ${base} for the next task.${stashed}`;
+}
+
 /** "Add Postgres users table!" → "flow/add-postgres-users-table" */
 export function branchName(text: string): string {
   const slug = text

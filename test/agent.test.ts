@@ -67,6 +67,16 @@ test('runs tools, narrates, and finishes', async () => {
   assertPaired(agent.history);
 });
 
+test('a tool name with a namespace in front still runs the tool', async () => {
+  const llm = new ScriptedLLM([
+    { content: null, tool_calls: [call('a', 'repo_browser.search', { pattern: 'sqlite' })] },
+    { content: 'Found it.' },
+  ]);
+  const agent = new Agent({ llm, tools: readOnlyTools(await workspace()) });
+  await agent.submit('Which database do we use?');
+  assert.match(agent.history.find((m) => m.role === 'tool')!.content!, /src\/db\.ts:1/);
+});
+
 test('barge-in aborts the in-flight step and re-plans with the interruption', async () => {
   const llm = new ScriptedLLM([
     'hang',
@@ -308,31 +318,33 @@ test('old tool results are shortened before sending, recent ones kept', () => {
   for (let i = 0; i < 8; i++) history.push({ role: 'tool', tool_call_id: String(i), content: big });
   const out = compactHistory(history);
   assert.match(out[1].content!, /older result shortened/);
-  assert.match(out[2].content!, /older result shortened/);
-  assert.equal(out[3].content, big);
+  assert.match(out[4].content!, /older result shortened/);
+  assert.equal(out[5].content, big);
   assert.equal(out.at(-1)!.content, big);
   assert.equal(history[1].content, big, 'the real history is not modified');
 });
 
-test('a malformed tool call from the provider is retried', async () => {
-  let calls = 0;
-  const server = http.createServer((req, res) => {
-    req.resume();
-    req.on('end', () => {
-      res.setHeader('content-type', 'application/json');
-      if (++calls === 1) {
-        res.statusCode = 400;
-        return res.end(JSON.stringify({ error: { code: 'tool_use_failed' } }));
-      }
-      res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
+for (const code of ['tool_use_failed', 'output_parse_failed']) {
+  test(`a ${code} reply from the provider is retried`, async () => {
+    let calls = 0;
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json');
+        if (++calls === 1) {
+          res.statusCode = 400;
+          return res.end(JSON.stringify({ error: { code } }));
+        }
+        res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
+      });
     });
+    await new Promise<void>((r) => server.listen(0, r));
+    const url = `http://localhost:${(server.address() as { port: number }).port}`;
+    const llm = new OpenAICompatibleLLM(url, 'main', 'k', false, [], [1]);
+    assert.equal((await llm.chat([], [], new AbortController().signal)).content, 'ok');
+    server.close();
   });
-  await new Promise<void>((r) => server.listen(0, r));
-  const url = `http://localhost:${(server.address() as { port: number }).port}`;
-  const llm = new OpenAICompatibleLLM(url, 'main', 'k', false, [], [1]);
-  assert.equal((await llm.chat([], [], new AbortController().signal)).content, 'ok');
-  server.close();
-});
+}
 
 test('update_plan is shown to the user and a barge-in marks the next plan as a re-plan', async () => {
   const plan1 = { steps: [{ text: 'Add SQLite', status: 'active' }, { text: 'Create users table', status: 'pending' }] };
@@ -394,9 +406,53 @@ test('a rate limit with no backup waits, then tries once more', async () => {
   p.close();
 });
 
+test('a per-minute rate limit is waited out several times before the task gives up', async () => {
+  const p = await fakeProvider([429, 429, 429, 200], ['only-model']);
+  const llm = new OpenAICompatibleLLM(p.url, 'only-model', 'k', false, ['only-model'], [1], 60_000, 45_000, 0);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from only-model');
+  assert.equal(p.seen.length, 4);
+  p.close();
+});
+
+test('a rate limit that shows up on a retry after a 5xx is waited out too', async () => {
+  const p = await fakeProvider([502, 429, 200], ['only-model']);
+  const llm = new OpenAICompatibleLLM(p.url, 'only-model', 'k', false, ['only-model'], [1, 1], 60_000, 45_000, 0);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from only-model');
+  assert.equal(p.seen.length, 3);
+  p.close();
+});
+
+test('a rate limit still fails after the last wait', async () => {
+  const p = await fakeProvider([429, 429, 429, 429, 429, 429], ['only-model']);
+  const llm = new OpenAICompatibleLLM(p.url, 'only-model', 'k', false, ['only-model'], [1], 60_000, 45_000, 0);
+  await assert.rejects(llm.chat([], [], new AbortController().signal), /free-tier limit/);
+  assert.equal(p.seen.length, 5);
+  p.close();
+});
+
+test('a used-up daily quota fails at once and says when it frees up', async () => {
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.statusCode = 429;
+      res.end(JSON.stringify({ error: { message: 'Rate limit reached on tokens per day (TPD). Please try again in 22m1.056s.' } }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const url = `http://localhost:${(server.address() as { port: number }).port}`;
+  const llm = new OpenAICompatibleLLM(url, 'only-model', 'k', false, ['only-model'], [1], 60_000, 45_000, 0);
+  await assert.rejects(llm.chat([], [], new AbortController().signal), /daily free-tier limit for only-model.*about 23 minutes/);
+  server.close();
+});
+
 test('retryAfterSeconds reads headers and Gemini retryDelay', () => {
   assert.equal(retryAfterSeconds(new Headers({ 'retry-after': '7' }), ''), 7);
   assert.equal(retryAfterSeconds(new Headers(), '[{"error":{"details":[{"retryDelay": "23.4s"}]}}]'), 24);
+  assert.equal(retryAfterSeconds(new Headers(), 'Rate limit reached. Please try again in 9.4725s. Need more tokens?'), 10);
+  assert.equal(retryAfterSeconds(new Headers(), 'tokens per day (TPD). Please try again in 22m1.056s.'), 1322);
+  assert.equal(retryAfterSeconds(new Headers(), 'Please try again in 1h2m3s.'), 3723);
   assert.equal(retryAfterSeconds(new Headers(), 'nothing'), undefined);
 });
 
