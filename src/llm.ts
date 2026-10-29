@@ -106,8 +106,12 @@ const BUSY = new Set([429, 500, 502, 503, 504]);
 export function retryAfterSeconds(headers: Headers, body: string): number | undefined {
   const header = Number(headers.get('retry-after'));
   if (header > 0) return Math.ceil(header);
-  const m = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/) ?? body.match(/try again in (\d+(?:\.\d+)?)s/i);
-  return m ? Math.ceil(Number(m[1])) : undefined;
+  const m = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+  if (m) return Math.ceil(Number(m[1]));
+  // Groq: "try again in 9.47s", "22m1.056s" or "1h2m3s".
+  const g = body.match(/try again in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?/i);
+  if (!g || !(g[1] || g[2] || g[3])) return undefined;
+  return Math.ceil(Number(g[1] ?? 0) * 3600 + Number(g[2] ?? 0) * 60 + Number(g[3] ?? 0));
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -271,6 +275,10 @@ export class OpenAICompatibleLLM implements LLM {
       }
     }
     if (res.status === 429) {
+      const wait = retryAfterSeconds(res.headers, await res.text()) ?? 0;
+      if (wait > 120) {
+        throw new Error(`The daily free-tier limit for ${this.model} is used up. It frees up in about ${Math.ceil(wait / 60)} minutes. A second provider (LLM_BACKUP_PROVIDER in .env) keeps you going meanwhile.`);
+      }
       throw new Error('The free-tier limit for this key is used up for now. Wait a minute and try again. Shorter tasks use fewer requests.');
     }
     if (BUSY.has(res.status)) {

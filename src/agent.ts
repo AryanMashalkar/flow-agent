@@ -40,7 +40,7 @@ Rules:
 - The user may interrupt you mid-task. An interruption overrides the earlier instruction. First call update_plan: keep finished steps as done, mark steps that no longer fit as dropped, and add the new steps. Say the change in one sentence, then continue.
 - When finished, give a short spoken summary (one to three sentences). Put any file paths or code after the summary.`;
 
-const KEEP_FULL_TOOL_RESULTS = 6;
+const KEEP_FULL_TOOL_RESULTS = 4;
 const OLD_RESULT_CHARS = 400;
 
 /**

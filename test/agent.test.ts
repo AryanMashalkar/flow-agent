@@ -318,8 +318,8 @@ test('old tool results are shortened before sending, recent ones kept', () => {
   for (let i = 0; i < 8; i++) history.push({ role: 'tool', tool_call_id: String(i), content: big });
   const out = compactHistory(history);
   assert.match(out[1].content!, /older result shortened/);
-  assert.match(out[2].content!, /older result shortened/);
-  assert.equal(out[3].content, big);
+  assert.match(out[4].content!, /older result shortened/);
+  assert.equal(out[5].content, big);
   assert.equal(out.at(-1)!.content, big);
   assert.equal(history[1].content, big, 'the real history is not modified');
 });
@@ -432,10 +432,27 @@ test('a rate limit still fails after the last wait', async () => {
   p.close();
 });
 
+test('a used-up daily quota fails at once and says when it frees up', async () => {
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.statusCode = 429;
+      res.end(JSON.stringify({ error: { message: 'Rate limit reached on tokens per day (TPD). Please try again in 22m1.056s.' } }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const url = `http://localhost:${(server.address() as { port: number }).port}`;
+  const llm = new OpenAICompatibleLLM(url, 'only-model', 'k', false, ['only-model'], [1], 60_000, 45_000, 0);
+  await assert.rejects(llm.chat([], [], new AbortController().signal), /daily free-tier limit for only-model.*about 23 minutes/);
+  server.close();
+});
+
 test('retryAfterSeconds reads headers and Gemini retryDelay', () => {
   assert.equal(retryAfterSeconds(new Headers({ 'retry-after': '7' }), ''), 7);
   assert.equal(retryAfterSeconds(new Headers(), '[{"error":{"details":[{"retryDelay": "23.4s"}]}}]'), 24);
   assert.equal(retryAfterSeconds(new Headers(), 'Rate limit reached. Please try again in 9.4725s. Need more tokens?'), 10);
+  assert.equal(retryAfterSeconds(new Headers(), 'tokens per day (TPD). Please try again in 22m1.056s.'), 1322);
+  assert.equal(retryAfterSeconds(new Headers(), 'Please try again in 1h2m3s.'), 3723);
   assert.equal(retryAfterSeconds(new Headers(), 'nothing'), undefined);
 });
 
