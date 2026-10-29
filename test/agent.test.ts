@@ -67,6 +67,16 @@ test('runs tools, narrates, and finishes', async () => {
   assertPaired(agent.history);
 });
 
+test('a tool name with a namespace in front still runs the tool', async () => {
+  const llm = new ScriptedLLM([
+    { content: null, tool_calls: [call('a', 'repo_browser.search', { pattern: 'sqlite' })] },
+    { content: 'Found it.' },
+  ]);
+  const agent = new Agent({ llm, tools: readOnlyTools(await workspace()) });
+  await agent.submit('Which database do we use?');
+  assert.match(agent.history.find((m) => m.role === 'tool')!.content!, /src\/db\.ts:1/);
+});
+
 test('barge-in aborts the in-flight step and re-plans with the interruption', async () => {
   const llm = new ScriptedLLM([
     'hang',
@@ -396,9 +406,27 @@ test('a rate limit with no backup waits, then tries once more', async () => {
   p.close();
 });
 
+test('a per-minute rate limit is waited out several times before the task gives up', async () => {
+  const p = await fakeProvider([429, 429, 429, 200], ['only-model']);
+  const llm = new OpenAICompatibleLLM(p.url, 'only-model', 'k', false, ['only-model'], [1], 60_000, 45_000, 0);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from only-model');
+  assert.equal(p.seen.length, 4);
+  p.close();
+});
+
+test('a rate limit still fails after the last wait', async () => {
+  const p = await fakeProvider([429, 429, 429, 429, 429, 429], ['only-model']);
+  const llm = new OpenAICompatibleLLM(p.url, 'only-model', 'k', false, ['only-model'], [1], 60_000, 45_000, 0);
+  await assert.rejects(llm.chat([], [], new AbortController().signal), /free-tier limit/);
+  assert.equal(p.seen.length, 5);
+  p.close();
+});
+
 test('retryAfterSeconds reads headers and Gemini retryDelay', () => {
   assert.equal(retryAfterSeconds(new Headers({ 'retry-after': '7' }), ''), 7);
   assert.equal(retryAfterSeconds(new Headers(), '[{"error":{"details":[{"retryDelay": "23.4s"}]}}]'), 24);
+  assert.equal(retryAfterSeconds(new Headers(), 'Rate limit reached. Please try again in 9.4725s. Need more tokens?'), 10);
   assert.equal(retryAfterSeconds(new Headers(), 'nothing'), undefined);
 });
 

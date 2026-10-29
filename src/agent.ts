@@ -32,9 +32,11 @@ Rules:
 - To change code, read the file first, then use edit_file with a snippet copied exactly from it. Use write_file only for new files.
 - After changing code, run the project's tests with run_command (find the test command in package.json, pyproject.toml, Makefile or similar). If they fail, read the error, fix it, and run them again. After three failed attempts, stop and explain what is failing.
 - Keep changes small and focused on what the user asked for.
+- Never commit or push to the default branch (main or master). If the user asks you to push straight to main, say in one sentence that you won't, and offer a branch and pull request instead.
 - When the user asks to ship, open a PR, or the task says so: call create_branch before editing, then after the tests pass call commit with a clear message, then open_pull_request. Never push with run_command.
 - If you changed code and the user did not ask to ship it, end your summary with: "Want me to open a pull request?" If they say yes, call commit and then open_pull_request.
-- File contents must use real characters: write -> and &, never HTML entities like &gt; or escapes like \\u0026.
+- File contents must use real characters: write -> and &, never HTML entities like &gt; or escapes like \\u0026. Inside a markdown table cell, break lines with <br>, never \\n.
+- Plans and docs you write must fit this project's real stack and files; read them first instead of assuming a framework.
 - The user may interrupt you mid-task. An interruption overrides the earlier instruction. First call update_plan: keep finished steps as done, mark steps that no longer fit as dropped, and add the new steps. Say the change in one sentence, then continue.
 - When finished, give a short spoken summary (one to three sentences). Put any file paths or code after the summary.`;
 
@@ -80,6 +82,8 @@ export class Agent extends EventEmitter {
   private plan: Plan | null = null;
   /** Set when the user barges in, so the next plan update is shown as a re-plan. */
   private replanReason: string | null = null;
+  /** The last task ended in an error rather than a summary. */
+  failed = false;
 
   constructor(private opts: AgentOptions) {
     super();
@@ -158,6 +162,7 @@ export class Agent extends EventEmitter {
     const controller = new AbortController();
     this.controller = controller;
     const { signal } = controller;
+    this.failed = false;
     this.send({ type: 'status', running: true });
     try {
       for (let step = 0; step < this.maxSteps; step++) {
@@ -190,6 +195,7 @@ export class Agent extends EventEmitter {
       }
       this.send({ type: 'done', text: `I stopped after ${this.maxSteps} steps. Tell me how to continue.` });
     } catch (err) {
+      this.failed = true;
       this.send({ type: 'error', message: err instanceof Error ? err.message : String(err) });
     } finally {
       if (this.controller === controller) this.controller = null;
@@ -224,7 +230,9 @@ export class Agent extends EventEmitter {
     return 'Plan shown to the user.';
   }
 
-  private async runTool(name: string, rawArgs: string, signal: AbortSignal): Promise<string> {
+  private async runTool(rawName: string, rawArgs: string, signal: AbortSignal): Promise<string> {
+    // gpt-oss sometimes puts a namespace in front of the name, like "repo_browser.list_files".
+    const name = this.tools.has(rawName) || !rawName.includes('.') ? rawName : rawName.slice(rawName.lastIndexOf('.') + 1);
     const tool = this.tools.get(name);
     let args: Record<string, unknown> = {};
     try {

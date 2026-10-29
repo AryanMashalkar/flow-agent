@@ -93,14 +93,20 @@ export function pickModel(ids: string[]): string | undefined {
   return rankModels(ids).find((id) => !/lite/i.test(id));
 }
 
+/** How many times one request waits out a rate limit before giving up. */
+const RATE_LIMIT_WAITS = 4;
+
 /** Statuses that mean "busy, try again", not "your request is wrong". */
 const BUSY = new Set([429, 500, 502, 503, 504]);
 
-/** How long the provider asks us to wait, from a Retry-After header or Gemini's "retryDelay": "23s". */
+/**
+ * How long the provider asks us to wait, from a Retry-After header, Gemini's "retryDelay": "23s",
+ * or Groq's "Please try again in 9.47s".
+ */
 export function retryAfterSeconds(headers: Headers, body: string): number | undefined {
   const header = Number(headers.get('retry-after'));
   if (header > 0) return Math.ceil(header);
-  const m = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+  const m = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/) ?? body.match(/try again in (\d+(?:\.\d+)?)s/i);
   return m ? Math.ceil(Number(m[1])) : undefined;
 }
 
@@ -219,13 +225,21 @@ export class OpenAICompatibleLLM implements LLM {
     let res = await this.post(this.model, messages, tools, signal);
 
     if (res.status === 429) {
-      const body = await res.text();
       const backup = await this.tryBackups(messages, tools, signal);
       if (backup) return backup;
-      const wait = Math.min(retryAfterSeconds(res.headers, body) ?? this.rateLimitWaitS, 60);
-      this.notice(`Free-tier limit reached for ${this.model}. Waiting ${wait}s before trying again…`);
-      await sleep(wait * 1000, signal);
-      res = await this.post(this.model, messages, tools, signal);
+      // Per-minute token limits (Groq's free tier allows 8000 a minute) clear quickly, so a long
+      // task waits it out a few times instead of failing halfway through.
+      let body = '';
+      for (let i = 1; i <= RATE_LIMIT_WAITS && res.status === 429; i++) {
+        body = await res.text();
+        const asked = retryAfterSeconds(res.headers, body) ?? this.rateLimitWaitS;
+        // A daily quota resets in hours: waiting a minute won't help.
+        if (asked > 120) break;
+        const wait = Math.min(asked, 60);
+        this.notice(`Free-tier limit reached for ${this.model}. Waiting ${wait}s before trying again (${i} of ${RATE_LIMIT_WAITS})…`);
+        await sleep(wait * 1000, signal);
+        res = await this.post(this.model, messages, tools, signal);
+      }
       if (res.status !== 429) return res;
       return new Response(body, { status: 429 });
     }
