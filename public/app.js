@@ -34,15 +34,55 @@ function add(cls, text) {
 // Models write a little markdown (**bold**, `code`). Show it as formatting, built from DOM nodes, never innerHTML.
 function addRich(cls, text) {
   const el = add(cls, '');
+  const lines = text.split('\n');
+  let prose = [];
+  const flush = () => {
+    if (prose.length) appendInline(el, prose.join('\n'));
+    prose = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const isRow = (l) => /^\s*\|.*\|\s*$/.test(l ?? '');
+    // A markdown table: a row of cells, a |---| separator, then more rows.
+    if (isRow(lines[i]) && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1] ?? '') && lines[i + 1].includes('-')) {
+      flush();
+      const rows = [lines[i]];
+      i += 2;
+      while (isRow(lines[i])) rows.push(lines[i++]);
+      i--;
+      el.appendChild(table(rows));
+    } else prose.push(lines[i]);
+  }
+  flush();
+  return el;
+}
+
+function table(rows) {
+  const t = document.createElement('table');
+  rows.forEach((row, r) => {
+    const tr = document.createElement('tr');
+    for (const cell of row.trim().replace(/^\||\|$/g, '').split('|')) {
+      const td = document.createElement(r === 0 ? 'th' : 'td');
+      appendInline(td, cell.trim());
+      tr.appendChild(td);
+    }
+    t.appendChild(tr);
+  });
+  const wrap = document.createElement('div');
+  wrap.className = 'table-wrap';
+  wrap.appendChild(t);
+  return wrap;
+}
+
+// Models write a little markdown (**bold**, `code`). Show it as formatting, built from DOM nodes, never innerHTML.
+function appendInline(parent, text) {
   for (const part of text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/)) {
     if (!part) continue;
     const bold = /^\*\*(.+)\*\*$/.exec(part);
     const code = /^`(.+)`$/.exec(part);
     const node = bold ? document.createElement('strong') : code ? document.createElement('code') : document.createTextNode(part);
     if (bold || code) node.textContent = (bold ?? code)[1];
-    el.appendChild(node);
+    parent.appendChild(node);
   }
-  return el;
 }
 
 let pendingCommand = null;
@@ -80,7 +120,9 @@ if ('speechSynthesis' in window) {
 function speak(text) {
   if (replaying || !$('narrate').checked || !('speechSynthesis' in window) || !text) return;
   // Speak only the prose, not trailing code or paths.
-  const spoken = text.split(/\n\s*\n|```/)[0].replace(/[*_`#]/g, '').slice(0, 400);
+  // Tables and code are for reading, not listening.
+  const prose = text.split('\n').filter((l) => !/^\s*\|/.test(l)).join('\n');
+  const spoken = prose.split(/\n\s*\n|```/)[0].replace(/[*_`#]/g, '').slice(0, 400);
   const u = new SpeechSynthesisUtterance(spoken);
   if (voice) u.voice = voice;
   u.rate = 1.05;
