@@ -50,7 +50,8 @@ const server = createServer(async (req, res) => {
   }
   try {
     const body = await readFile(file);
-    res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' }).end(body);
+    // no-cache: after a `git pull` the browser must pick up the new UI, not a stale copy.
+    res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-cache' }).end(body);
   } catch {
     res.writeHead(404).end('Not found');
   }
