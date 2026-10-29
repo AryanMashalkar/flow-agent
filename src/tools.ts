@@ -99,7 +99,12 @@ export function readOnlyTools(root: string): Tool[] {
       ['path'],
       async (args) => {
         const file = resolveInside(root, args.path);
-        const text = await readFile(file, 'utf8');
+        const buf = await readFile(file);
+        // A NUL byte in the first 8 KB is the usual sign of a binary file.
+        if (buf.subarray(0, 8000).includes(0) || /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|exe|dll|bin|mp[34]|wav|woff2?)$/i.test(file)) {
+          return `${relPath(root, file)} is a binary file (${buf.length} bytes), so it can't be read as text.`;
+        }
+        const text = buf.toString('utf8');
         return text.length > MAX_READ ? text.slice(0, MAX_READ) + `\n…(truncated, ${text.length} chars total)` : text;
       },
     ),
@@ -150,7 +155,8 @@ function relPath(root: string, full: string): string {
 
 // Commands that are never worth running from a voice instruction.
 const BLOCKED_COMMANDS = [
-  /\brm\s+-[a-z]*r[a-z]*f?\s+(\/|~|\*|\.\s*$)/i,
+  /\brm\s+(-[a-z]*\s+)*-[a-z]*r[a-z]*\s+(-[a-z]*\s+)*(\/|~|\*|\.{1,2}\/?\*?(\s|$))/i,
+  /\bremove-item\b.*-recurse/i,
   /\b(format|mkfs|diskpart|shutdown|reboot)\b/i,
   /\bdel\s+\/[sq]/i,
   /\brd\s+\/s/i,
@@ -168,7 +174,8 @@ export function runShell(root: string, command: string, signal: AbortSignal, tim
   return new Promise<{ code: number | null; output: string }>((resolve, reject) => {
     const isWin = process.platform === 'win32';
     // detached gives the command its own process group so the whole group can be killed.
-    const child = spawn(command, { cwd: root, shell: true, detached: !isWin, env: { ...process.env, CI: '1', FORCE_COLOR: '0' } });
+    // stdin is closed so a command that waits for input ends instead of hanging until the timeout.
+    const child = spawn(command, { cwd: root, shell: true, detached: !isWin, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: '1', FORCE_COLOR: '0' } });
     let output = '';
     const collect = (d: Buffer) => {
       output += d.toString();

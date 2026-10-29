@@ -173,7 +173,7 @@ export class Agent extends EventEmitter {
 
         if (!reply.tool_calls) {
           this.finishPlan();
-          this.send({ type: 'done', text: reply.content ?? '' });
+          this.send({ type: 'done', text: reply.content?.trim() || 'Done.' });
           return;
         }
         if (reply.content?.trim()) this.send({ type: 'say', text: reply.content.trim() });
@@ -228,9 +228,12 @@ export class Agent extends EventEmitter {
     const tool = this.tools.get(name);
     let args: Record<string, unknown> = {};
     try {
-      args = rawArgs ? JSON.parse(rawArgs) : {};
+      const parsed = rawArgs ? JSON.parse(rawArgs) : {};
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+      args = parsed;
     } catch {
-      return `Error: arguments were not valid JSON: ${rawArgs}`;
+      this.send({ type: 'tool_result', name, ok: false, preview: 'The model sent broken arguments; asking it to retry.' });
+      return `Error: arguments were not a valid JSON object: ${String(rawArgs).slice(0, 500)}. Call ${name} again with valid JSON.`;
     }
     if (name === PLAN_TOOL.function.name) return this.updatePlan(args);
     this.send({ type: 'tool', name, args });
