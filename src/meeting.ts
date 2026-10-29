@@ -21,13 +21,43 @@ Rules:
 - If a later part of the meeting changed a decision, use the final decision.
 - At most 10 tasks.`;
 
-/** Pull the JSON object out of a reply that may be wrapped in ```json fences or prose. */
+/** Every balanced {...} or [...] in the text, outermost first, so prose around the JSON doesn't matter. */
+function jsonCandidates(text: string): unknown[] {
+  const found: unknown[] = [];
+  for (let start = 0; start < text.length; start++) {
+    if (text[start] !== '{' && text[start] !== '[') continue;
+    let depth = 0;
+    let inString = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (ch === '\\') i++;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') {
+        if (--depth === 0) {
+          try {
+            found.push(JSON.parse(text.slice(start, i + 1)));
+            start = i;
+          } catch {
+            // Not JSON; try the next opening bracket.
+          }
+          break;
+        }
+      }
+    }
+  }
+  return found;
+}
+
+/** Pull the task list out of a reply that may be wrapped in ```json fences or prose. */
 export function parseTasks(reply: string): MeetingTask[] {
-  const start = reply.indexOf('{');
-  const end = reply.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error('The model did not return a task list.');
-  const data = JSON.parse(reply.slice(start, end + 1)) as { tasks?: unknown };
-  const raw = Array.isArray(data.tasks) ? data.tasks : [];
+  const data = jsonCandidates(reply).find(
+    (d) => Array.isArray(d) || (d !== null && typeof d === 'object' && Array.isArray((d as { tasks?: unknown }).tasks)),
+  );
+  if (data === undefined) throw new Error('The model did not return a task list.');
+  const raw = (Array.isArray(data) ? data : (data as { tasks: unknown[] }).tasks) as unknown[];
   return raw
     .map((t) => (t && typeof t === 'object' ? (t as Record<string, unknown>) : {}))
     .filter((t) => typeof t.title === 'string' && t.title.trim())
@@ -71,16 +101,23 @@ const NUMBER_WORDS: Record<string, number> = {
   first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
 };
 
-export type MeetingCommand = { kind: 'one'; id: number } | { kind: 'all' };
+export type MeetingCommand = { kind: 'one'; id: number } | { kind: 'some'; ids: number[] } | { kind: 'all' };
 
-/** "do task 2", "work on task three", "run all the code tasks" → what to run. Anything else is null. */
+const VERB = String.raw`(?:do|run|start|ship|work on|go ahead with|take|pick up|handle|tackle)`;
+const NUM = String.raw`(?:\d+|${Object.keys(NUMBER_WORDS).join('|')})`;
+const toId = (w: string) => Number(w) || NUMBER_WORDS[w];
+
+/** "do task 2", "work on task three", "do tasks 1 and 3", "run all the code tasks" → what to run. Anything else is null. */
 export function parseMeetingCommand(text: string): MeetingCommand | null {
-  const t = text.toLowerCase().replace(/[.!?,]/g, ' ').trim();
-  if (/\b(do|run|start|ship|work on)\b.*\ball\b.*\b(tasks|items)\b/.test(t)) return { kind: 'all' };
-  const m = t.match(/\b(?:do|run|start|ship|work on)\s+(?:the\s+)?(?:(\w+)\s+(?:task|item)|(?:task|item)\s+(?:number\s+)?(\w+))\b/);
-  const word = m?.[2] ?? m?.[1];
-  if (!word) return null;
-  const id = Number(word) || NUMBER_WORDS[word];
+  const t = text.toLowerCase().replace(/[.!?,#]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (new RegExp(String.raw`\b${VERB}\b.*\ball\b.*\b(tasks|items)\b`).test(t)) return { kind: 'all' };
+  const many = t.match(new RegExp(String.raw`\b${VERB}\s+(?:the\s+)?(?:tasks|items)\s+((?:number\s+)?${NUM}(?:\s+(?:and|&|plus)?\s*${NUM})+)\b`));
+  if (many) {
+    const ids = [...new Set(many[1].split(/\s+/).map(toId).filter(Boolean))];
+    if (ids.length) return { kind: 'some', ids };
+  }
+  const m = t.match(new RegExp(String.raw`\b${VERB}\s+(?:the\s+)?(?:(\w+)\s+(?:task|item)|(?:task|item)\s+(?:number\s+)?(\w+))\b`));
+  const id = toId(m?.[2] ?? m?.[1] ?? '');
   return id ? { kind: 'one', id } : null;
 }
 
@@ -114,12 +151,11 @@ export class MeetingBoard {
 
   /** Queue tasks by id; "all" means every code task not yet done. Returns the ids queued. */
   run(cmd: MeetingCommand): number[] {
+    const wanted = cmd.kind === 'one' ? [cmd.id] : cmd.kind === 'some' ? cmd.ids : [];
     const ids =
       cmd.kind === 'all'
         ? this.tasks.filter((t) => t.kind === 'code' && t.status === 'todo').map((t) => t.id)
-        : this.tasks.some((t) => t.id === cmd.id && t.status !== 'running')
-          ? [cmd.id]
-          : [];
+        : wanted.filter((id) => this.tasks.some((t) => t.id === id && t.status !== 'running'));
     this.queue.push(...ids.filter((id) => !this.queue.includes(id)));
     if (!this.draining) void this.drain();
     return ids;

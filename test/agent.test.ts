@@ -7,7 +7,7 @@ import { Agent, compactHistory, type AgentEvent } from '../src/agent.ts';
 import type { Plan } from '../src/plan.ts';
 import type { ChatMessage, ChatResult, LLM } from '../src/llm.ts';
 import { allTools, readOnlyTools, resolveInside, type FileChange, type ToolContext } from '../src/tools.ts';
-import { OpenAICompatibleLLM, pickModel, rankModels, retryAfterSeconds, stripThoughts } from '../src/llm.ts';
+import { OpenAICompatibleLLM, pickModel, rankModels, retryAfterSeconds, salvageToolCalls, stripThoughts } from '../src/llm.ts';
 import http from 'node:http';
 
 /** A fake model that replays scripted replies, optionally waiting until aborted. */
@@ -410,4 +410,68 @@ test('reset stops a running task and starts a clean conversation', async () => {
   assert.equal(agent.history.length, 1, 'only the system prompt is left');
   await agent.submit('What does this project do?');
   assert.equal(llm.calls[1].length, 2, 'the new task sees none of the old one');
+});
+
+// Faults found by stress-testing the agent with misbehaving model replies.
+
+test('a tool call written as text is turned back into a real tool call', () => {
+  const calls = salvageToolCalls('<function=read_file>{"path": "README.md"}</function>');
+  assert.equal(calls?.[0].function.name, 'read_file');
+  assert.deepEqual(JSON.parse(calls![0].function.arguments), { path: 'README.md' });
+  assert.equal(salvageToolCalls('Plain answer with {braces}.'), undefined);
+});
+
+test('tool arguments sent as an object are accepted', async () => {
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      const call = { id: 'a', type: 'function', function: { name: 'read_file', arguments: { path: 'x.js' } } };
+      res.end(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [call] } }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const llm = new OpenAICompatibleLLM(`http://localhost:${(server.address() as { port: number }).port}`, 'm', 'k', false);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.tool_calls?.[0].function.arguments, '{"path":"x.js"}');
+  server.closeAllConnections();
+  server.close();
+});
+
+test('broken tool arguments are shown and sent back so the model can retry', async () => {
+  const llm = new ScriptedLLM([
+    { content: null, tool_calls: [{ id: 'a', type: 'function', function: { name: 'read_file', arguments: '{path: oops' } }] },
+    { content: '' },
+  ]);
+  const agent = new Agent({ llm, tools: readOnlyTools(await workspace()) });
+  const events: AgentEvent[] = [];
+  agent.on('event', (e) => events.push(e));
+  await agent.submit('read it');
+  assert.equal(events.find((e) => e.type === 'tool_result')?.type, 'tool_result');
+  assert.match(agent.history.find((m) => m.role === 'tool')!.content!, /not a valid JSON object.*Call read_file again/);
+  // An empty final reply still tells the user it finished.
+  assert.deepEqual(events.find((e) => e.type === 'done'), { type: 'done', text: 'Done.' });
+});
+
+test('binary files are described instead of dumped', async () => {
+  const dir = await workspace();
+  await writeFile(path.join(dir, 'logo.dat'), Buffer.from([0x89, 0x50, 0, 0, 0xff]));
+  const read = readOnlyTools(dir).find((t) => t.spec.function.name === 'read_file')!;
+  assert.match(await read.run({ path: 'logo.dat' }, ctx()), /binary file \(5 bytes\)/);
+});
+
+test('a command waiting for input ends instead of hanging', async () => {
+  const run = allTools(await workspace()).find((t) => t.spec.function.name === 'run_command')!;
+  const started = Date.now();
+  const out = await run.run({ command: `node -e "process.stdin.on('data', () => {})"` }, ctx());
+  assert.match(out, /^Exit code 0/);
+  assert.ok(Date.now() - started < 10_000);
+});
+
+test('more ways of wiping the workspace are blocked', async () => {
+  const run = allTools(await workspace()).find((t) => t.spec.function.name === 'run_command')!;
+  for (const command of ['rm -rf ./*', 'rm -fr .', 'rm -r -f ..', 'powershell Remove-Item -Recurse -Force .']) {
+    await assert.rejects(run.run({ command }, ctx()), /destructive/, command);
+  }
+  assert.match(await run.run({ command: 'rm -rf ./build' }, ctx()), /^Exit code 0/);
 });

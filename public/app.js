@@ -380,7 +380,7 @@ function send() {
   if (viewing) backToLive();
   shush();
   // A bare spoken "stop" halts the agent; anything longer is a new instruction or a barge-in.
-  if (/^(stop|halt|cancel)[.!]?$/i.test(text)) ws.send(JSON.stringify({ type: 'stop' }));
+  if (/^((ok(ay)?|hey|please|no)[,.]?\s+)?(stop|halt|cancel)((\s+(it|that|now|please|everything))|([,.!]?\s*(stop|halt)))*[.!]?$/i.test(text)) ws.send(JSON.stringify({ type: 'stop' }));
   else if (/^(recap|wrap( it)? up|show (me )?(my )?(stats|recap))[.!]?$/i.test(text)) showRecap();
   else ws.send(JSON.stringify({ type: 'command', text }));
 }

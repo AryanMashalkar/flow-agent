@@ -68,6 +68,26 @@ export function stripThoughts(text: string | null): string | null {
     .trim();
 }
 
+/**
+ * Llama models on Groq sometimes write a tool call as text, like
+ * <function=read_file>{"path":"a.js"}</function>, instead of a real tool call.
+ * Turn those back into tool calls so they run instead of being shown to the user.
+ */
+export function salvageToolCalls(text: string | null): ToolCall[] | undefined {
+  if (!text) return undefined;
+  const calls: ToolCall[] = [];
+  const re = /<function=([\w-]+)>?\s*(\{[\s\S]*?\})\s*<\/function>/g;
+  for (const m of text.matchAll(re)) {
+    try {
+      JSON.parse(m[2]);
+    } catch {
+      continue;
+    }
+    calls.push({ id: `call_${Date.now()}_${calls.length}`, type: 'function', function: { name: m[1], arguments: m[2] } });
+  }
+  return calls.length ? calls : undefined;
+}
+
 /** The best general model, never a "lite" one. */
 export function pickModel(ids: string[]): string | undefined {
   return rankModels(ids).find((id) => !/lite/i.test(id));
@@ -244,12 +264,20 @@ export class OpenAICompatibleLLM implements LLM {
     const msg = data.choices?.[0]?.message;
     if (!msg) throw new Error('Model API returned no choices');
     // Some providers omit tool call ids; the tool replies need one to pair with.
+    // Some providers (Ollama) send the arguments as an object rather than a JSON string.
     const tool_calls = msg.tool_calls?.map((c, i) => ({
       ...c,
       type: 'function' as const,
       id: c.id || `call_${Date.now()}_${i}`,
+      function: {
+        name: c.function?.name ?? '',
+        arguments: typeof c.function?.arguments === 'string' ? c.function.arguments : JSON.stringify(c.function?.arguments ?? {}),
+      },
     }));
-    return { content: stripThoughts(msg.content ?? null) || null, tool_calls: tool_calls?.length ? tool_calls : undefined };
+    const content = stripThoughts(msg.content ?? null) || null;
+    if (tool_calls?.length) return { content, tool_calls };
+    const salvaged = salvageToolCalls(content);
+    return salvaged ? { content: null, tool_calls: salvaged } : { content };
   }
 }
 

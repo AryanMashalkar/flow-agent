@@ -14,6 +14,20 @@ test('parseTasks reads fenced JSON and numbers the tasks', () => {
   assert.throws(() => parseTasks('no json here'), /did not return/);
 });
 
+test('parseTasks ignores prose with braces around the JSON, and accepts a bare list', () => {
+  assert.equal(parseTasks('{"tasks":[{"title":"A"}]}\n\nNote: {see above}')[0].title, 'A');
+  assert.deepEqual(parseTasks('Sure! {"tasks": []} hope it helps {x}'), []);
+  assert.equal(parseTasks('[{"title":"Bare"}]')[0].title, 'Bare');
+  assert.throws(() => parseTasks('no tasks here'), /did not return a task list/);
+});
+
+test('parseMeetingCommand understands more ways of saying it', () => {
+  assert.deepEqual(parseMeetingCommand('Do task #2.'), { kind: 'one', id: 2 });
+  assert.deepEqual(parseMeetingCommand('Go ahead with task three.'), { kind: 'one', id: 3 });
+  assert.deepEqual(parseMeetingCommand('Do tasks 1 and 4.'), { kind: 'some', ids: [1, 4] });
+  assert.equal(parseMeetingCommand('What do you think about task 2?'), null);
+});
+
 test('parseMeetingCommand understands spoken task commands', () => {
   assert.deepEqual(parseMeetingCommand('Do task 2.'), { kind: 'one', id: 2 });
   assert.deepEqual(parseMeetingCommand('work on task three'), { kind: 'one', id: 3 });
