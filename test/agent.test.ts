@@ -415,6 +415,15 @@ test('a per-minute rate limit is waited out several times before the task gives 
   p.close();
 });
 
+test('a rate limit that shows up on a retry after a 5xx is waited out too', async () => {
+  const p = await fakeProvider([502, 429, 200], ['only-model']);
+  const llm = new OpenAICompatibleLLM(p.url, 'only-model', 'k', false, ['only-model'], [1, 1], 60_000, 45_000, 0);
+  const out = await llm.chat([], [], new AbortController().signal);
+  assert.equal(out.content, 'hi from only-model');
+  assert.equal(p.seen.length, 3);
+  p.close();
+});
+
 test('a rate limit still fails after the last wait', async () => {
   const p = await fakeProvider([429, 429, 429, 429, 429, 429], ['only-model']);
   const llm = new OpenAICompatibleLLM(p.url, 'only-model', 'k', false, ['only-model'], [1], 60_000, 45_000, 0);
