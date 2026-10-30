@@ -179,6 +179,24 @@ export class OpenAICompatibleLLM implements LLM {
     this.onNotice?.(text);
   }
 
+  /**
+   * Gemini rejects a conversation whose tool calls carry no thought signature, which is every call
+   * another model made before a switch to Gemini. Google's documented placeholder lets those through.
+   * Other providers get the calls without Gemini's extra field.
+   */
+  forProvider(messages: ChatMessage[]): ChatMessage[] {
+    const gemini = /generativelanguage\.googleapis\.com/.test(this.baseUrl);
+    return messages.map((m) => {
+      if (!m.tool_calls) return m;
+      const tool_calls = m.tool_calls.map((c) => {
+        const { extra_content, ...rest } = c as ToolCall & { extra_content?: { google?: { thought_signature?: string } } };
+        if (!gemini) return rest;
+        return extra_content?.google?.thought_signature ? c : { ...rest, extra_content: { google: { thought_signature: 'skip_thought_signature_validator' } } };
+      });
+      return { ...m, tool_calls };
+    });
+  }
+
   /** One request. A request that hangs past the timeout counts as busy (504), so it is retried. */
   private async post(model: string, messages: ChatMessage[], tools: ToolSpec[], signal: AbortSignal): Promise<Response> {
     try {
@@ -187,12 +205,20 @@ export class OpenAICompatibleLLM implements LLM {
         signal: AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]),
         headers: this.headers,
         // Providers reject tool_choice without tools, so plain completions send neither.
-        body: JSON.stringify(tools.length ? { model, messages, tools, tool_choice: 'auto' } : { model, messages }),
+        body: JSON.stringify(tools.length ? { model, messages: this.forProvider(messages), tools, tool_choice: 'auto' } : { model, messages: this.forProvider(messages) }),
       });
-      if (res.status !== 400) return res;
+      if (res.ok) return res;
+      // Error bodies are read once, here, into a fresh response, so the retry logic can read them
+      // again. A body that can't be read (seen behind a proxy) counts as busy and is retried.
+      let text: string;
+      try {
+        text = await res.text();
+      } catch {
+        return new Response(null, { status: 502 });
+      }
       // Groq rejects a reply when the model writes a malformed tool call or unparsable output; a retry usually gets a good one.
-      const text = await res.text();
-      return new Response(text, { status: /tool_use_failed|output_parse_failed/.test(text) ? 502 : 400 });
+      const status = res.status === 400 && /tool_use_failed|output_parse_failed/.test(text) ? 502 : res.status;
+      return new Response(text, { status, headers: res.headers });
     } catch (err) {
       if (signal.aborted) throw err;
       if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {

@@ -39,7 +39,7 @@ Wispr Flow is the only input. The UI detects Wispr's whole-phrase inserts and au
 - Free models only: Groq (gpt-oss-120b) or Gemini, with Ollama as a local option. The client survives free-tier limits with retries, same-provider backup models, Retry-After handling and a second provider as backup.
 - Barge-in is real cancellation, not a UI trick: an `AbortController` cancels the model request, any running command's process tree is killed, unrun tool calls are answered as skipped, and the interruption plus the current plan goes into the same conversation so the agent re-plans instead of starting over.
 - Safety rails: file access is sandboxed to the workspace, destructive commands and pushes to main are refused, and all git runs without a shell.
-- 63 automated tests, CI on Linux and Windows. A 26-prompt stress test against the real model is in [`docs/stress-test.md`](../stress-test.md), failures included.
+- 65 automated tests, CI on Linux and Windows. A 26-prompt stress test against the real model is in [`docs/stress-test.md`](../stress-test.md), failures included: 21 pass, 2 partial, 2 fixed but not yet re-run.
 
 ## What's next
 

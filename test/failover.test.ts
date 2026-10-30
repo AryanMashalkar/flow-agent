@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FailoverLLM, llmFromEnv, type ChatResult, type LLM } from '../src/llm.ts';
+import { FailoverLLM, llmFromEnv, OpenAICompatibleLLM, type ChatMessage, type ChatResult, type LLM } from '../src/llm.ts';
 
 function stub(label: string, answer: () => ChatResult): LLM & { calls: number } {
   return {
@@ -50,4 +50,16 @@ test('llmFromEnv adds the backup provider only when one is set', () => {
   const both = llmFromEnv({ ...env, LLM_BACKUP_PROVIDER: 'gemini', LLM_BACKUP_API_KEY: 'g' });
   assert.ok(both instanceof FailoverLLM);
   assert.throws(() => llmFromEnv({ ...env, LLM_BACKUP_PROVIDER: 'gemini' }), /LLM_BACKUP_API_KEY is missing/);
+});
+
+test('tool calls from another model get a placeholder thought signature for Gemini, and lose it elsewhere', () => {
+  const history: ChatMessage[] = [
+    { role: 'user', content: 'Read a.js' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{}' } }] },
+  ];
+  const gemini = new OpenAICompatibleLLM('https://generativelanguage.googleapis.com/v1beta/openai', 'gemini-3.8-flash', 'k');
+  const sig = (m: ChatMessage[]) => (m[1].tool_calls![0] as { extra_content?: { google: { thought_signature: string } } }).extra_content?.google.thought_signature;
+  assert.equal(sig(gemini.forProvider(history)), 'skip_thought_signature_validator');
+  const groq = new OpenAICompatibleLLM('https://api.groq.com/openai/v1', 'openai/gpt-oss-120b', 'k');
+  assert.equal(sig(groq.forProvider(gemini.forProvider(history))), undefined);
 });

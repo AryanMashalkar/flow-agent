@@ -563,3 +563,11 @@ test('search accepts a single file as its path', async () => {
   const search = readOnlyTools(dir).find((t) => t.spec.function.name === 'search')!;
   assert.match(await search.run({ pattern: 'sqlite', path: 'src/db.ts' }, ctx()), /^src\/db\.ts:1:/);
 });
+
+test('a bare "yes" to the pull request question asks for the PR, not just a commit', async () => {
+  const llm = new ScriptedLLM([{ content: 'Fixed the README. Want me to open a pull request?' }, { content: 'Opening it.' }]);
+  const agent = new Agent({ llm, tools: readOnlyTools(await workspace()) });
+  await agent.submit('Fix the README port.');
+  await agent.submit('yes');
+  assert.match(String(llm.calls[1].at(-1)?.content), /call create_branch .*then open_pull_request/);
+});

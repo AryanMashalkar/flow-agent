@@ -125,7 +125,8 @@ export class Agent extends EventEmitter {
   constructor(private opts: AgentOptions) {
     super();
     this.tools = new Map(opts.tools.map((t) => [t.spec.function.name, t]));
-    this.maxSteps = opts.maxSteps ?? 25;
+    // Free-tier models often make one tool call per step, so a real task can take 30 or more.
+    this.maxSteps = opts.maxSteps ?? 40;
     opts.llm.onNotice = (text) => this.send({ type: 'model_status', text });
   }
 
@@ -150,12 +151,22 @@ export class Agent extends EventEmitter {
     this.running = this.running.then(() => {
       this.queued--;
       this.replanReason = interrupt ? text : null;
-      this.history.push({ role: 'user', content: interrupt ? this.interruption(text) : `${text}\n\n(If this is a coding task, start with update_plan.)` });
+      if (!interrupt) this.plan = null;
+      this.history.push({ role: 'user', content: interrupt ? this.interruption(text) : this.instruction(text) });
       // A newer instruction is already queued behind this one: record this one and let that run.
       if (gen !== this.generation) return;
       return this.loop();
     });
     return this.running;
+  }
+
+  /** A bare "yes" to "Want me to open a pull request?" means ship it, not just commit. */
+  private instruction(text: string): string {
+    const lastReply = [...this.history].reverse().find((m) => m.role === 'assistant' && m.content)?.content ?? '';
+    if (/open a pull request\?\s*$/i.test(lastReply) && /^(yes|yeah|yep|sure|ok(ay)?|please|go ahead|do it)\b[\s\w,.!]{0,30}$/i.test(text.trim())) {
+      return `${text}\n\n(The user said yes to opening a pull request: call create_branch if you are on the default branch, commit, then open_pull_request.)`;
+    }
+    return `${text}\n\n(If this is a coding task, start with update_plan for this task only. Before writing a plan or doc about this project, read its main files so it fits the real stack.)`;
   }
 
   private interruption(text: string): string {
