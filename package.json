@@ -12,7 +12,9 @@
     "demo": "tsx scripts/demo.ts",
     "test": "tsx --test test/*.test.ts",
     "test:demo": "npm --prefix demo/todo-app test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dictation-log": "tsx scripts/dictation-log.ts",
+    "record-replay": "tsx scripts/record-replay.ts"
   },
   "engines": {
     "node": ">=20.12"

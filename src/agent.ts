@@ -40,6 +40,41 @@ Rules:
 - The user may interrupt you mid-task. An interruption overrides the earlier instruction. First call update_plan: keep finished steps as done, mark steps that no longer fit as dropped, and add the new steps. Say the change in one sentence, then continue.
 - When finished, give a short spoken summary (one to three sentences). Put any file paths or code after the summary.`;
 
+/**
+ * Some models (gpt-oss) call tools without saying anything first. The user still hears what is
+ * happening, in a sentence built from the tool call itself.
+ */
+export function narrate(name: string, args: Record<string, unknown>): string | null {
+  const arg = (k: string) => (typeof args[k] === 'string' ? (args[k] as string) : '');
+  switch (name) {
+    case 'list_files':
+      return 'Looking at the project files.';
+    case 'read_file':
+      return arg('path') ? `Reading ${arg('path')}.` : 'Reading a file.';
+    case 'search':
+      return arg('pattern') ? `Searching for "${arg('pattern').slice(0, 40)}".` : 'Searching the code.';
+    case 'edit_file':
+      return arg('path') ? `Editing ${arg('path')}.` : 'Editing a file.';
+    case 'write_file':
+      return arg('path') ? `Writing ${arg('path')}.` : 'Writing a file.';
+    case 'run_command':
+      return /\btest\b/.test(arg('command')) ? 'Running the tests.' : 'Running a command.';
+    case 'git_status':
+      return 'Checking what changed.';
+    case 'create_branch':
+      return 'Creating a branch for this change.';
+    case 'commit':
+      return 'Committing the changes.';
+    case 'open_pull_request':
+      return 'Pushing the branch and opening the pull request.';
+    default:
+      return null;
+  }
+}
+
+/** A summary that says a pull request was opened, when no open_pull_request call was made. */
+const CLAIMS_PR = /\b(opened|created|raised|submitted)\b[^.]{0,30}\b(pull request|PR)\b|\b(pull request|PR)\b[^.]{0,20}\b(is (now )?)?(open(ed)?|created|up)\b/i;
+
 const KEEP_FULL_TOOL_RESULTS = 4;
 const OLD_RESULT_CHARS = 400;
 
@@ -84,6 +119,8 @@ export class Agent extends EventEmitter {
   private replanReason: string | null = null;
   /** The last task ended in an error rather than a summary. */
   failed = false;
+  /** open_pull_request was called during the current instruction. */
+  private triedPullRequest = false;
 
   constructor(private opts: AgentOptions) {
     super();
@@ -163,6 +200,8 @@ export class Agent extends EventEmitter {
     this.controller = controller;
     const { signal } = controller;
     this.failed = false;
+    this.triedPullRequest = false;
+    let checkedClaims = false;
     this.send({ type: 'status', running: true });
     try {
       for (let step = 0; step < this.maxSteps; step++) {
@@ -177,11 +216,31 @@ export class Agent extends EventEmitter {
         this.history.push({ role: 'assistant', content: reply.content, tool_calls: reply.tool_calls });
 
         if (!reply.tool_calls) {
+          // Models sometimes say they opened a PR without calling the tool. Hold them to it, once.
+          if (!checkedClaims && !this.triedPullRequest && CLAIMS_PR.test(reply.content ?? '')) {
+            checkedClaims = true;
+            this.history.push({
+              role: 'user',
+              content: '[Check] You said a pull request was opened, but you never called open_pull_request. If the user wants a PR, call commit if needed and then open_pull_request now. Otherwise correct your summary.',
+            });
+            continue;
+          }
           this.finishPlan();
           this.send({ type: 'done', text: reply.content?.trim() || 'Done.' });
           return;
         }
         if (reply.content?.trim()) this.send({ type: 'say', text: reply.content.trim() });
+        else {
+          const first = reply.tool_calls.find((c) => c.function.name !== PLAN_TOOL.function.name);
+          let args = {};
+          try {
+            args = JSON.parse(first?.function.arguments || '{}');
+          } catch {
+            // Broken arguments are reported when the tool runs.
+          }
+          const line = first && narrate(first.function.name.replace(/^.*\./, ''), args);
+          if (line) this.send({ type: 'say', text: line });
+        }
 
         for (const call of reply.tool_calls) {
           // Every tool call must get a reply or the next model request is invalid.
@@ -244,6 +303,7 @@ export class Agent extends EventEmitter {
       return `Error: arguments were not a valid JSON object: ${String(rawArgs).slice(0, 500)}. Call ${name} again with valid JSON.`;
     }
     if (name === PLAN_TOOL.function.name) return this.updatePlan(args);
+    if (name === 'open_pull_request') this.triedPullRequest = true;
     this.send({ type: 'tool', name, args });
     if (!tool) {
       this.send({ type: 'tool_result', name, ok: false, preview: 'unknown tool' });

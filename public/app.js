@@ -12,6 +12,8 @@ function countKey() {
 }
 let autoSendTimer = null;
 let dictatedSinceSend = false;
+// Replay mode (?replay=file.json, or any github.io page): a recorded session plays in this same UI, with no server.
+const REPLAY = new URLSearchParams(location.search).get('replay') ?? (location.hostname.endsWith('.github.io') ? '' : null);
 
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
@@ -373,16 +375,17 @@ function showThinking() {
 
 function send() {
   clearTimeout(autoSendTimer);
+  const source = dictatedSinceSend ? 'dictated' : 'typed';
   dictatedSinceSend = false;
   const text = input.value.trim();
-  if (!text || ws.readyState !== WebSocket.OPEN) return;
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
   input.value = '';
   if (viewing) backToLive();
   shush();
   // A bare spoken "stop" halts the agent; anything longer is a new instruction or a barge-in.
   if (/^((ok(ay)?|hey|please|no)[,.]?\s+)?(stop|halt|cancel)((\s+(it|that|now|please|everything))|([,.!]?\s*(stop|halt)))*[.!]?$/i.test(text)) ws.send(JSON.stringify({ type: 'stop' }));
   else if (/^(recap|wrap( it)? up|show (me )?(my )?(stats|recap))[.!]?$/i.test(text)) showRecap();
-  else ws.send(JSON.stringify({ type: 'command', text }));
+  else ws.send(JSON.stringify({ type: 'command', text, source }));
 }
 
 input.addEventListener('input', (e) => {
@@ -409,7 +412,7 @@ $('stop').onclick = () => {
   ws.send(JSON.stringify({ type: 'stop' }));
 };
 
-connect();
+if (REPLAY === null) connect();
 input.focus();
 
 // Meeting transcripts: the Meeting button, or drop a file anywhere.
@@ -573,7 +576,8 @@ function record(e) {
   const last = live.events.findLast((x) => x.type === e.type);
   // The server re-sends the current plan and meeting on reconnect; don't store them twice.
   if ((e.type === 'plan' || e.type === 'meeting') && last && JSON.stringify(last) === JSON.stringify(e)) return;
-  const copy = e.type === 'file_changed' && e.diff.length > 4000 ? { ...e, diff: `${e.diff.slice(0, 4000)}\n…` } : e;
+  // The time of each event lets a saved session play back at its real pace.
+  const copy = { ...(e.type === 'file_changed' && e.diff.length > 4000 ? { ...e, diff: `${e.diff.slice(0, 4000)}\n…` } : e), t: Date.now() };
   live.events.push(copy);
   if (live.events.length > MAX_EVENTS) live.events.shift();
   if (e.type === 'user' && !e.interrupt) {
@@ -668,7 +672,18 @@ function renderSessions() {
   }
 }
 
-$('new-session').onclick = () => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'new_session' }));
+$('new-session').onclick = () => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'new_session' }));
+// Save the session on screen as a replay file: put it in public/replays/ and anyone can watch it without installing.
+$('save-replay').onclick = () => {
+  const s = viewing ?? live;
+  if (!s?.events.length) return;
+  const replay = { format: 'flow-agent-replay/1', title: s.title || 'Flow Agent session', recorded: new Date(s.started).toISOString(), model: $('model').textContent, workspace: $('workspace').textContent, keysTyped: s === live ? keysTyped : undefined, events: s.events };
+  const a = document.createElement('a');
+  a.download = `flow-agent-session-${new Date(s.started).toISOString().slice(0, 16).replace(/\D/g, '')}.json`;
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(replay, null, 1)], { type: 'application/json' }));
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
 $('back-live').onclick = backToLive;
 $('clear-history').onclick = () => {
   sessions = live ? [live] : [];
@@ -680,7 +695,7 @@ $('toggle-history').onclick = () => {
   if (window.matchMedia('(max-width: 1180px)').matches) document.body.classList.toggle('show-history');
   else document.body.classList.toggle('no-history');
 };
-renderSessions();
+if (REPLAY === null) renderSessions();
 
 // The welcome screen shows until the conversation has something in it.
 new MutationObserver(() => ($('welcome').hidden = log.childElementCount > 0)).observe(log, { childList: true });
