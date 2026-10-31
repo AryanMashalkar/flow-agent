@@ -151,7 +151,7 @@ function dispatch(e) {
   switch (e.type) {
     case 'hello':
       $('model').textContent = e.model;
-      $('workspace').textContent = e.workspace;
+      setWorkspace(e.workspace);
       if (!live || live.serverId !== e.session) startSession(e.session);
       else if (!log.childElementCount && !viewing) renderSession(live);
       setRunning(e.running);
@@ -677,7 +677,7 @@ $('new-session').onclick = () => ws?.readyState === WebSocket.OPEN && ws.send(JS
 $('save-replay').onclick = () => {
   const s = viewing ?? live;
   if (!s?.events.length) return;
-  const replay = { format: 'flow-agent-replay/1', title: s.title || 'Flow Agent session', recorded: new Date(s.started).toISOString(), model: $('model').textContent, workspace: $('workspace').textContent, keysTyped: s === live ? keysTyped : undefined, events: s.events };
+  const replay = { format: 'flow-agent-replay/1', title: s.title || 'Flow Agent session', recorded: new Date(s.started).toISOString(), model: $('model').textContent, workspace: $('workspace').title || $('workspace').textContent, keysTyped: s === live ? keysTyped : undefined, events: s.events };
   const a = document.createElement('a');
   a.download = `flow-agent-session-${new Date(s.started).toISOString().slice(0, 16).replace(/\D/g, '')}.json`;
   a.href = URL.createObjectURL(new Blob([JSON.stringify(replay, null, 1)], { type: 'application/json' }));
@@ -705,3 +705,20 @@ for (const b of document.querySelectorAll('button.example')) {
     send();
   };
 }
+
+// Show only the last two folders of the workspace path; the full path stays in the tooltip.
+function setWorkspace(path) {
+  const el = $('workspace');
+  const full = path ?? '';
+  const parts = full.split(/[\\/]/).filter(Boolean);
+  el.textContent = parts.length > 2 ? '…/' + parts.slice(-2).join('/') : full;
+  el.title = full;
+}
+
+// Dim a metric while it is still zero, so a fresh page doesn't open on a wall of zeros.
+(() => {
+  const cells = document.querySelectorAll('.metrics b');
+  const mark = () => cells.forEach((b) => b.parentElement.classList.toggle('zero', /^\s*[0–-]?\s*$/.test(b.textContent) || b.textContent.trim() === '0'));
+  new MutationObserver(mark).observe(document.querySelector('.metrics'), { subtree: true, childList: true, characterData: true });
+  mark();
+})();
