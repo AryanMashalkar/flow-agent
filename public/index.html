@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Flow Agent</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700;800&display=swap" />
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="ui.css" />
 </head>
 <body>
   <header class="topbar">
@@ -15,6 +16,10 @@
       <span class="logo" aria-hidden="true">&lt;<b>&gt;</b></span>
       <span class="name">FLOW AGENT</span>
       <span class="dot" id="status-dot" title="Idle"></span>
+    </div>
+    <div class="top-actions">
+      <button id="toggle-arcade" class="icon chip" title="Play Bug Bash while the agent codes">🎮 <span>Bug Bash</span></button>
+      <button id="toggle-sound" class="icon chip" title="Game sounds" aria-pressed="false">🔇</button>
     </div>
     <div class="meta"><span id="model-status" hidden></span><span id="model">connecting…</span><span class="sep">/</span><span id="workspace"></span></div>
   </header>
@@ -55,9 +60,47 @@
         <span>Viewing a past session (read only)</span>
         <button id="back-live" class="secondary small">Back to live</button>
       </div>
-      <div id="log" aria-live="polite"></div>
+      <nav class="tabs" id="main-tabs" role="tablist">
+        <button role="tab" data-pane="chat" class="active">Chat</button>
+        <button role="tab" data-pane="code">Code <i id="n-code">0</i></button>
+        <button role="tab" data-pane="term">Terminal <i id="n-term">0</i></button>
+        <button role="tab" data-pane="timeline">Voice timeline <i id="n-time">0</i></button>
+        <span class="spacer"></span>
+        <span id="live-tag" class="live-tag" hidden><b></b>AGENT WRITING</span>
+      </nav>
+      <div id="log" class="pane" data-pane="chat" aria-live="polite"></div>
+      <section id="code-pane" class="pane" data-pane="code" hidden>
+        <div class="code-side">
+          <div class="pane-head"><span class="label">Changed files</span><label class="follow"><input type="checkbox" id="code-follow" checked /> Follow live</label></div>
+          <ol id="code-files"></ol>
+        </div>
+        <div class="code-view">
+          <div class="code-head"><span id="code-path">No changes yet</span><span id="code-stats"></span></div>
+          <div id="code-body"><p class="pane-empty">Files the agent writes show up here, line by line, as it writes them.</p></div>
+        </div>
+      </section>
+      <section id="term-pane" class="pane" data-pane="term" hidden>
+        <div id="term-body"><p class="pane-empty">Commands the agent runs, like your tests, show up here with their output.</p></div>
+      </section>
+      <section id="timeline-pane" class="pane" data-pane="timeline" hidden>
+        <ol id="timeline"><li class="pane-empty">Every instruction you dictate, every barge-in and every re-plan, in order.</li></ol>
+      </section>
+      <section id="arcade" hidden>
+        <div class="arcade-head">
+          <span class="label">Bug Bash</span>
+          <span class="arcade-sub" id="arcade-sub">Squash bugs before they reach prod</span>
+          <span class="spacer"></span>
+          <span class="arcade-score">SCORE <b id="g-score">0</b></span>
+          <span class="arcade-score">BEST <b id="g-best">0</b></span>
+          <span class="arcade-lives" id="g-lives"></span>
+          <button id="arcade-min" class="icon" title="Hide the game" aria-label="Hide the game">✕</button>
+        </div>
+        <canvas id="game" width="640" height="300"></canvas>
+        <div id="arcade-banner" hidden></div>
+      </section>
+      <div id="toasts" aria-live="polite"></div>
       <section id="welcome">
-        <p class="label">Hacker home</p>
+        <p class="label">Voice-native dev agent · <span class="blink">●</span> ready</p>
         <h1>Talk. It codes.<br />Talk over it. It re-plans.</h1>
         <p class="sub">Hold your Wispr Flow key and say what you want built. Change your mind mid-task by just speaking again.</p>
         <div class="examples">
@@ -65,27 +108,41 @@
           <button class="example">Fix the crash when the password is empty, and add a test.</button>
           <button class="example">What does this project do?</button>
         </div>
+        <div class="feature-row">
+          <div><b>⚡ Barge-in</b><span>Talk over it mid-task. It drops stale steps and re-plans.</span></div>
+          <div><b>📋 Meetings → PRs</b><span>Drop a transcript. Say "do task 2". Get a branch.</span></div>
+          <div><b>🎮 Bug Bash</b><span>A mini game that wakes up while the agent writes your code.</span></div>
+        </div>
       </section>
     </main>
 
     <aside id="plan">
+      <nav class="tabs side-tabs" id="side-tabs" role="tablist">
+        <button role="tab" data-side="plan" class="active">Plan</button>
+        <button role="tab" data-side="meeting">Meeting tasks <i id="n-meet">0</i></button>
+      </nav>
+      <div class="side-sec" data-side="plan">
       <div class="plan-head">
         <span id="plan-title" class="label">Plan</span>
         <span id="plan-progress"></span>
       </div>
       <div id="plan-banner" hidden></div>
       <ol id="plan-steps"><li class="empty">Say what you want built. The plan shows up here.</li></ol>
+      <div class="plan-meter"><div id="plan-bar"></div></div>
+      </div>
+      <div class="side-sec" data-side="meeting" hidden>
 
       <div class="plan-head meeting-head">
         <span id="meeting-title" class="label">Meeting tasks</span>
         <button id="run-all" class="secondary small" hidden>Run all code tasks</button>
       </div>
       <ol id="meeting-tasks"><li class="empty">Drop a meeting transcript anywhere on the page, or use the Meeting button. Then say "do task 1".</li></ol>
+      </div>
     </aside>
   </div>
 
   <footer>
-    <textarea id="input" rows="2" placeholder="Hold your Wispr Flow key and speak. Talk over the agent any time to interrupt it."></textarea>
+    <div class="input-wrap"><div id="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><textarea id="input" rows="2" placeholder="Hold your Wispr Flow key and speak. Talk over the agent any time to interrupt it."></textarea></div>
     <div class="controls">
       <label><input type="checkbox" id="autosend" checked /> Auto-send after dictation</label>
       <label><input type="checkbox" id="narrate" checked /> Speak replies</label>
@@ -125,5 +182,6 @@
 
   <script src="app.js"></script>
   <script src="replay.js"></script>
+  <script src="ui.js"></script>
 </body>
 </html>
