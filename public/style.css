@@ -55,6 +55,7 @@ body {
 .metrics b { font-family: var(--mono); font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .metrics .hot b { color: var(--accent); }
 .metrics .keys b { color: var(--accent); }
+.metrics div.zero span, .metrics div.zero b { opacity: 0.35; transition: opacity .3s; }
 
 /* Three columns: history, conversation, plan */
 .work { flex: 1; min-height: 0; display: grid; grid-template-columns: 260px 1fr 340px; }

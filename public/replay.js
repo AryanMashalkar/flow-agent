@@ -134,7 +134,7 @@
       return;
     }
     $('model').textContent = rec.model ?? 'recorded session';
-    $('workspace').textContent = rec.workspace ?? '';
+    setWorkspace(rec.workspace);
     $('replay-title').textContent = rec.title ?? 'Replay';
     $('replay-note').textContent = rec.note ?? `Recorded ${new Date(rec.recorded).toLocaleString()}.`;
     showCounters();
