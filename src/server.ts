@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -39,7 +39,19 @@ const MIME: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
+  '.json': 'application/json; charset=utf-8',
 };
+
+/** Every instruction, as said, goes to logs/dictation.jsonl. `npm run dictation-log` turns it into a shareable page. */
+const dictationLog = path.join(appRoot, 'logs', 'dictation.jsonl');
+async function logInstruction(entry: { text: string; source: string; interrupt: boolean }): Promise<void> {
+  try {
+    await mkdir(path.dirname(dictationLog), { recursive: true });
+    await appendFile(dictationLog, JSON.stringify({ t: new Date().toISOString(), ...entry }) + '\n');
+  } catch (err) {
+    console.warn(`  Could not write the dictation log: ${(err as Error).message}`);
+  }
+}
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -135,7 +147,7 @@ wss.on('connection', (ws: WebSocket) => {
   if (lastPlan) ws.send(JSON.stringify({ type: 'plan', plan: { ...lastPlan, replanned: false } }));
   if (board.tasks.length) ws.send(JSON.stringify(meetingState(board)));
   ws.on('message', (raw) => {
-    let msg: { type?: string; text?: string; name?: string; id?: number; all?: boolean };
+    let msg: { type?: string; text?: string; name?: string; id?: number; all?: boolean; source?: string };
     try {
       msg = JSON.parse(String(raw));
     } catch {
@@ -145,6 +157,7 @@ wss.on('connection', (ws: WebSocket) => {
       const text = msg.text.trim();
       metrics.instructions++;
       metrics.wordsDictated += text.split(/\s+/).length;
+      void logInstruction({ text, source: msg.source === 'typed' ? 'typed' : msg.source === 'dictated' ? 'dictated' : 'unknown', interrupt: agent.busy });
       const meetingCmd = board.tasks.length ? parseMeetingCommand(text) : null;
       if (meetingCmd) {
         const ids = board.run(meetingCmd);

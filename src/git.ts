@@ -178,7 +178,7 @@ export function gitTools(root: string): Tool[] {
         const title = String(args.title ?? '').trim() || branch;
         const body = `${String(args.body ?? '').trim()}\n\n_Opened by voice with Flow Agent._`.trim();
         const pr = await createPullRequest(root, branch, base, title, body, ctx.signal);
-        if (!pr) return `Pushed ${branch} to origin. origin is not on GitHub, so there is no pull request page to open.`;
+        if (!pr) return `Pushed ${branch} to origin. origin is not on GitHub, so there is no pull request page to open. Tell the user the branch is pushed and ready for review; don't offer to open a pull request again.`;
         const { url, created } = pr;
         ctx.onPullRequest?.({ url, title, created });
         return created

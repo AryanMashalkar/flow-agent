@@ -8,6 +8,10 @@ Built for the WeMakeDevs × Wispr Flow **No Hands** hackathon. It was built hand
 
 ![Flow Agent re-planning after a spoken barge-in: the SQLite steps are struck out and the Postgres steps take over](docs/screenshot.png)
 
+## Watch it first, no install
+
+**[aryanmashalkar.github.io/flow-agent](https://aryanmashalkar.github.io/flow-agent/)** plays recorded sessions back in the real UI: the agent getting talked over mid-task and re-planning, and a standup transcript turning into a branch. They are real runs against Groq's free tier. Nothing to install, no API key. Press **Play**, and tick **Speak replies** to hear the narration.
+
 ## Quick start (Windows, macOS, Linux)
 
 You need Node 20.12 or newer. You don't need a paid API key.
@@ -88,6 +92,8 @@ A barge-in aborts the model request in flight (`AbortController`), kills any run
 - **Voice out:** the agent says one short sentence before each action, read aloud in the most natural voice your system has. As soon as you start dictating, it goes quiet. When it finishes a change you didn't ask to ship, it asks "Want me to open a pull request?" and you just say yes.
 - **Session recap:** say "recap" (or click Recap) for a shareable card of the session: words dictated, keys typed, barge-ins, re-plans, files changed and PRs. A real voice-only session shows **0 keys typed**.
 - **History:** every session is kept in your browser, like a chat history. Reopen any past session from the sidebar (read only), or click **+ New** to start fresh.
+- **Replays:** **Save as replay** downloads the session on screen. Put the file in `public/replays/`, list it in `public/replays/index.json`, and it plays on the replay site with its real timing. `npm run record-replay` records the bundled scenarios against a running agent.
+- **Dictation log:** every instruction is written to `logs/dictation.jsonl` with whether Wispr Flow dictated it or it was typed, and whether it was a barge-in. `npm run dictation-log` turns it into `docs/dictation-log.md`, a page you can share.
 - **Calm when the model isn't:** free-tier retries and backup-model switches show as a small chip in the header, not in the conversation.
 
 ## Meetings in, pull requests out
@@ -101,6 +107,7 @@ Paste a meeting transcript (from Wispr Notetaker or anywhere) with the **Meeting
 - **Every instruction to the agent** is spoken with Wispr Flow. The UI tells dictation apart from typing (Wispr inserts whole phrases at once) and sends it after a 1.2 second pause, so there is no Enter key in the loop.
 - **Interruptions are just more dictation.** You don't press a stop button to change course; you talk over the agent.
 - **Meetings come in as transcripts** from Wispr Notetaker or anything else, and turn into tasks the agent can run.
+- **Every instruction is on the record.** The dictation log shows each one, marked dictated or typed, so "built by voice" is something you can check, not just a claim.
 - **This project was built by voice.** Every feature request, bug report and change of mind during the build was spoken through Wispr Flow.
 
 Trying it for the first time, or testing it for us? See [TRY_IT.md](docs/TRY_IT.md).
@@ -108,7 +115,7 @@ Trying it for the first time, or testing it for us? See [TRY_IT.md](docs/TRY_IT.
 ## Development
 
 ```bash
-npm test             # agent loop, barge-in, git, meeting and sandbox tests (no API key needed)
+npm test             # agent loop, barge-in, git, meeting, sandbox and log tests (no API key needed)
 npm run test:demo    # the demo app's own tests
 npm run typecheck
 ```
@@ -123,6 +130,7 @@ CI runs all three on Linux and Windows.
 - [x] Day 4: branches, commits and PRs by voice, plus meeting transcripts → tasks → PRs
 - [x] Day 5: one-command demo app, architecture diagram, CI on Linux and Windows, friendlier startup errors
 - [x] Day 6: session recap card, keys-typed counter, spoken PR confirmation, natural voice, quiet model status
+- [x] Day 7: no-install replay site, dictation log, narration for silent models, PR-claim check, stress test re-run
 
 ## License
 

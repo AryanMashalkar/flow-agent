@@ -36,11 +36,21 @@
         <span class="label">History</span>
         <button id="new-session" class="secondary small">+ New</button>
       </div>
+      <button id="save-replay" class="link" title="Download the session on screen as a replay file">Save as replay</button>
       <ol id="sessions"></ol>
       <button id="clear-history" class="link">Clear history</button>
     </aside>
 
     <main>
+      <div id="replay-bar" hidden>
+        <div class="replay-text"><b id="replay-title">Replay</b><span id="replay-note"></span></div>
+        <div class="replay-controls">
+          <span id="replay-progress"></span>
+          <button id="replay-play" class="small">▶ Play</button>
+          <button id="replay-speed" class="secondary small" title="Playback speed">1×</button>
+          <button id="replay-end" class="secondary small">Skip to end</button>
+        </div>
+      </div>
       <div id="viewing" hidden>
         <span>Viewing a past session (read only)</span>
         <button id="back-live" class="secondary small">Back to live</button>
@@ -114,5 +124,6 @@
   <div id="drop-hint" hidden>Drop the transcript to find its tasks</div>
 
   <script src="app.js"></script>
+  <script src="replay.js"></script>
 </body>
 </html>

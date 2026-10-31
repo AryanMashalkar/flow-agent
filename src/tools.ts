@@ -113,14 +113,16 @@ export function readOnlyTools(root: string): Tool[] {
       'Search workspace files for a regular expression. Returns matching lines as path:line: text.',
       {
         pattern: { type: 'string', description: 'JavaScript regular expression, case-insensitive.' },
-        path: { type: 'string', description: 'Folder to search in. Defaults to the root.' },
+        path: { type: 'string', description: 'Folder or file to search in. Defaults to the root.' },
       },
       ['pattern'],
       async (args) => {
         const re = new RegExp(String(args.pattern), 'i');
         const start = resolveInside(root, args.path);
         const files: string[] = [];
-        await walk(root, start, 8, files, 2000);
+        // Models often pass a single file as the path; search just that file.
+        if ((await stat(start)).isFile()) files.push(relPath(root, start));
+        else await walk(root, start, 8, files, 2000);
         const hits: string[] = [];
         for (const rel of files) {
           if (rel.endsWith('/') || hits.length >= 100) continue;

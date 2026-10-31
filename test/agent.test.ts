@@ -531,3 +531,43 @@ test('more ways of wiping the workspace are blocked', async () => {
   }
   assert.match(await run.run({ command: 'rm -rf ./build' }, ctx()), /^Exit code 0/);
 });
+
+test('narrates a tool call the model made without saying anything', async () => {
+  const llm = new ScriptedLLM([
+    { content: null, tool_calls: [call('a', 'read_file', { path: 'src/db.ts' })] },
+    { content: 'It uses SQLite.' },
+  ]);
+  const agent = new Agent({ llm, tools: readOnlyTools(await workspace()) });
+  const said: string[] = [];
+  agent.on('event', (e: AgentEvent) => e.type === 'say' && said.push(e.text));
+  await agent.submit('What database is this?');
+  assert.deepEqual(said, ['Reading src/db.ts.']);
+});
+
+test('a summary claiming a PR without calling open_pull_request is sent back once', async () => {
+  const llm = new ScriptedLLM([
+    { content: 'Committed the change and opened a pull request for review.' },
+    { content: 'Sorry, I committed the change but have not opened a pull request yet.' },
+  ]);
+  const agent = new Agent({ llm, tools: readOnlyTools(await workspace()) });
+  const done: string[] = [];
+  agent.on('event', (e: AgentEvent) => e.type === 'done' && done.push(e.text));
+  await agent.submit('Commit this and open a PR.');
+  assert.equal(done.length, 1);
+  assert.match(done[0], /have not opened/);
+  assert.match(String(llm.calls[1].at(-1)?.content), /never called open_pull_request/);
+});
+
+test('search accepts a single file as its path', async () => {
+  const dir = await workspace();
+  const search = readOnlyTools(dir).find((t) => t.spec.function.name === 'search')!;
+  assert.match(await search.run({ pattern: 'sqlite', path: 'src/db.ts' }, ctx()), /^src\/db\.ts:1:/);
+});
+
+test('a bare "yes" to the pull request question asks for the PR, not just a commit', async () => {
+  const llm = new ScriptedLLM([{ content: 'Fixed the README. Want me to open a pull request?' }, { content: 'Opening it.' }]);
+  const agent = new Agent({ llm, tools: readOnlyTools(await workspace()) });
+  await agent.submit('Fix the README port.');
+  await agent.submit('yes');
+  assert.match(String(llm.calls[1].at(-1)?.content), /call create_branch .*then open_pull_request/);
+});
