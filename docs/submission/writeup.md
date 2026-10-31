@@ -2,7 +2,7 @@
 
 **Track:** Builders · **Repo:** https://github.com/AryanMashalkar/flow-agent
 **Watch it now, no install:** https://aryanmashalkar.github.io/flow-agent/ (real recorded sessions, played back in the real UI)
-**Demo video:** <VIDEO LINK>
+**Demo video:** https://youtu.be/a7eXt6NDJdw (1:56)
 
 ## The problem, from my own desk
 
