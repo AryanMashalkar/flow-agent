@@ -4,16 +4,11 @@
 **Watch it now, no install:** https://aryanmashalkar.github.io/flow-agent/ (real recorded sessions, played back in the real UI)
 **Demo video:** <VIDEO LINK>
 
-<!--
-  soham: fill every [YOU: ...] below in your own words, then delete these brackets.
-  Real numbers beat adjectives. If you don't know a number, leave the sentence out rather than guess.
--->
-
 ## The problem, from my own desk
 
-[YOU: 2 to 4 sentences. A real moment when a coding agent went the wrong way and you had to stop it. What were you building, what did it do wrong, what did you have to do to stop it (Esc, Ctrl+C, retype the whole prompt)?]
+When I work with an AI coding agent, I usually re-prompt it several times on one task, because the answer often doesn't match what I meant until the second or third try. Part of that is the idea itself: some concepts are hard to put into a short typed prompt, and typing out a long explanation is slow and tiring. The worse part is the waiting. I have to sit through the whole response before I can tell whether it's right, and only then can I correct it.
 
-[YOU: one number from your own week, for example "I run about N agent tasks a day and restart roughly N of them because I changed my mind", or "typing a 60-word instruction takes me about N seconds; dictating it with Wispr takes N".]
+Flow Agent fixes both. I explain the idea by speaking it with Wispr Flow, which is easier than typing it. The moment I see the plan heading the wrong way, I just talk over it, and it drops what it was doing and re-plans. I don't wait for a wrong answer to finish.
 
 Voice coding tools today are dictation bolted onto a chat box. You speak, then you wait, then you read. If the agent heads the wrong way, you reach for the keyboard to stop it. When you pair with a person, you just interrupt them. Flow Agent lets you do that with an agent.
 
@@ -31,7 +26,11 @@ Flow Agent is an autonomous dev agent that you drive entirely with Wispr Flow.
 
 Wispr Flow is the only input. The UI detects Wispr's whole-phrase inserts and auto-sends after a 1.2 s pause, so there is no Enter key in the loop. Interruptions are just more dictation, and a spoken "stop" halts the agent. This only works because Wispr is fast and accurate enough to talk over a running agent; with typing you would stop it first.
 
-[YOU: paste your Wispr Flow usage card numbers here, for example words dictated this week, and link `docs/dictation-log.md` once you've generated it from your own sessions.]
+My Wispr Flow usage card ([screenshot](wispr-usage-card.png)): **107 words per minute, top 2% of Flow users**, 104 words dictated on desktop, 7 fixes made by Flow (2 words corrected, 5 dictionary fixes), and a 2-day streak (77 words on 28 Oct, 27 on 29 Oct).
+
+The app logs every instruction it receives. In my recorded session on 31 Oct, all 9 instructions (66 words) were dictated with Wispr Flow and none were typed, and 3 of them were barge-ins spoken while the agent was working. The full log is in [`docs/dictation-log.md`](../dictation-log.md), Wispr's mishearings included.
+
+The narration in the demo video is an AI voice (ElevenLabs). The agent footage is from real recorded runs on Groq.
 
 ## How it's built
 
