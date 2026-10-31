@@ -2,6 +2,8 @@
 
 **A coding agent you talk to, and talk over.** Dictate a feature with [Wispr Flow](https://wisprflow.ai). The agent explores your code, narrates what it's doing out loud, and if you change your mind mid-task ("stop, use Postgres not SQLite") it drops the in-flight step and re-plans on the spot.
 
+**▶ Demo video (1:56):** https://youtu.be/a7eXt6NDJdw
+
 Built for the WeMakeDevs × Wispr Flow **No Hands** hackathon. It was built hands-free too: every instruction that shaped it was spoken through Wispr Flow.
 
 [![CI](https://github.com/AryanMashalkar/flow-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/AryanMashalkar/flow-agent/actions/workflows/ci.yml)
